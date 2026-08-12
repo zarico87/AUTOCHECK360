@@ -1,10 +1,48 @@
 // src/utils/emailService.js
 
 /**
- * Servicio de envío de notificaciones por correo electrónico a través de la API
+ * Servicio de envío de notificaciones por correo electrónico a través de Formspree
+ * Endpoint oficial: https://formspree.io/f/xvkprrpd
  */
 
+const FORMSPREE_ENDPOINT = 'https://formspree.io/f/xvkprrpd';
+
 export async function sendEmailNotification({ to, subject, text, html, type = 'GENERAL' }) {
+  const payload = {
+    email: to || 'zadik.arg@gmail.com',
+    destinatario: to,
+    subject: subject,
+    _subject: subject,
+    message: text,
+    mensajeHTML: html,
+    tipoNotificacion: type,
+    fecha: new Date().toLocaleString('es-AR'),
+    sistema: 'AutoCheck 360',
+  };
+
+  try {
+    // 1. Envío directo desde el cliente a Formspree
+    const response = await fetch(FORMSPREE_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      console.log(`[FORMSPREE CLIENT] Correo enviado exitosamente (${type}) a ${to}`);
+      return { success: true, data, dispatchedTo: to, formspree: true };
+    } else {
+      console.warn(`[FORMSPREE CLIENT] Formspree devolvió código ${response.status}. Reintentando vía backend...`);
+    }
+  } catch (err) {
+    console.warn(`[FORMSPREE CLIENT] Falló llamada directa a Formspree: ${err.message}. Usando backend /api/send-email...`);
+  }
+
+  // 2. Fallback a través del servidor backend /api/send-email
   try {
     const response = await fetch('/api/send-email', {
       method: 'POST',
