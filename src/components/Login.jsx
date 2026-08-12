@@ -1,13 +1,14 @@
 // src/components/Login.jsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import Logo from './Logo';
 import {
   setSession,
-  authenticateUser,
+  authenticateUserAsync,
   addRegisteredWorkshop,
-  resetUserPassword
+  resetUserPassword,
+  syncWorkshopsFromFirestore
 } from '../utils/storage';
 import { sendRegistrationNotification, sendPasswordRecoveryNotification } from '../utils/emailService';
 
@@ -15,6 +16,12 @@ const Login = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [workshopNameInput, setWorkshopNameInput] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  // Sincronizar la lista de talleres desde Firestore al cargar la página de login
+  useEffect(() => {
+    syncWorkshopsFromFirestore();
+  }, []);
   
   // Estado para el modal de Registro de Taller
   const [showRegisterModal, setShowRegisterModal] = useState(false);
@@ -49,7 +56,7 @@ const Login = () => {
   };
 
   // Función para manejar el envío del formulario de Login
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     const cleanUsername = username.trim();
 
@@ -73,59 +80,65 @@ const Login = () => {
       return;
     }
 
-    // Autenticar usuario y contraseña
-    const authResult = authenticateUser(cleanUsername, password);
+    setIsLoggingIn(true);
 
-    if (!authResult.success) {
-      if (authResult.error === 'USER_NOT_FOUND') {
-        Swal.fire({
-          title: 'Usuario no encontrado',
-          html: 'Usuario no encontrado. Registrá tu taller o contactá al soporte técnico en <b>3512469463</b>.',
-          icon: 'error',
-          confirmButtonColor: '#EF4444',
-          confirmButtonText: 'Entendido',
-        });
-      } else if (authResult.error === 'INVALID_PASSWORD') {
-        Swal.fire({
-          title: 'Contraseña Incorrecta',
-          html: 'La contraseña ingresada no coincide.<br/>Si no recordás tu clave, usá la opción <b>"¿Olvidaste tu contraseña?"</b>.',
-          icon: 'error',
-          confirmButtonColor: '#EF4444',
-          confirmButtonText: 'Reintentar',
-        });
+    try {
+      // Autenticar usuario y contraseña (intenta local primero y si falla busca en la nube)
+      const authResult = await authenticateUserAsync(cleanUsername, password);
+
+      if (!authResult.success) {
+        if (authResult.error === 'USER_NOT_FOUND') {
+          Swal.fire({
+            title: 'Usuario no encontrado',
+            html: 'Usuario no encontrado. Registrá tu taller o contactá al soporte técnico en <b>3512469463</b>.',
+            icon: 'error',
+            confirmButtonColor: '#EF4444',
+            confirmButtonText: 'Entendido',
+          });
+        } else if (authResult.error === 'INVALID_PASSWORD') {
+          Swal.fire({
+            title: 'Contraseña Incorrecta',
+            html: 'La contraseña ingresada no coincide.<br/>Si no recordás tu clave, usá la opción <b>"¿Olvidaste tu contraseña?"</b>.',
+            icon: 'error',
+            confirmButtonColor: '#EF4444',
+            confirmButtonText: 'Reintentar',
+          });
+        }
+        return;
       }
-      return;
+
+      const matchedWorkshop = authResult.workshop;
+      const finalWorkshopName = workshopNameInput.trim() || matchedWorkshop?.nombreTaller || `Taller ${cleanUsername.toUpperCase()}`;
+      const finalDomicilio = matchedWorkshop?.domicilio || 'Av. Colón 1234, Córdoba';
+      const finalTelefono = matchedWorkshop?.telefono || '351-1234567';
+
+      // Guardar la sesión activa
+      setSession({
+        usuario: matchedWorkshop.usuario,
+        password: matchedWorkshop.password || password,
+        nombreTaller: finalWorkshopName,
+        domicilio: finalDomicilio,
+        telefono: finalTelefono,
+        email: matchedWorkshop?.email || '',
+        cuit: matchedWorkshop?.cuit || '',
+        fechaLogin: new Date().toISOString(),
+      });
+
+      Swal.fire({
+        title: '¡Bienvenido!',
+        text: `Iniciando sesión en AutoCheck 360 como "${finalWorkshopName}"`,
+        icon: 'success',
+        confirmButtonColor: '#84CC16',
+        timer: 1500,
+        showConfirmButton: false,
+      });
+
+      setTimeout(() => {
+        navigate('/dashboard');
+      }, 1500);
+    } finally {
+      setIsLoggingIn(false);
     }
-
-    const matchedWorkshop = authResult.workshop;
-    const finalWorkshopName = workshopNameInput.trim() || matchedWorkshop?.nombreTaller || `Taller ${cleanUsername.toUpperCase()}`;
-    const finalDomicilio = matchedWorkshop?.domicilio || 'Av. Colón 1234, Córdoba';
-    const finalTelefono = matchedWorkshop?.telefono || '351-1234567';
-
-    // Guardar la sesión activa
-    setSession({
-      usuario: matchedWorkshop.usuario,
-      password: matchedWorkshop.password || password,
-      nombreTaller: finalWorkshopName,
-      domicilio: finalDomicilio,
-      telefono: finalTelefono,
-      email: matchedWorkshop?.email || '',
-      cuit: matchedWorkshop?.cuit || '',
-      fechaLogin: new Date().toISOString(),
-    });
-
-    Swal.fire({
-      title: '¡Bienvenido!',
-      text: `Iniciando sesión en AutoCheck 360 como "${finalWorkshopName}"`,
-      icon: 'success',
-      confirmButtonColor: '#84CC16',
-      timer: 1500,
-      showConfirmButton: false,
-    });
-
-    setTimeout(() => {
-      navigate('/dashboard');
-    }, 1500);
   };
 
   // Manejar el registro de nuevo taller
@@ -348,9 +361,16 @@ const Login = () => {
           <button
             type="submit"
             id="login-submit"
-            className="w-full bg-brand-blue hover:bg-blue-800 text-white font-bold py-3 px-4 rounded-xl transition-all duration-300 focus:ring-4 focus:ring-blue-300 shadow-lg hover:shadow-xl hover:-translate-y-0.5 mt-2"
+            disabled={isLoggingIn}
+            className="w-full bg-brand-blue hover:bg-blue-800 text-white font-bold py-3 px-4 rounded-xl transition-all duration-300 focus:ring-4 focus:ring-blue-300 shadow-lg hover:shadow-xl hover:-translate-y-0.5 mt-2 disabled:opacity-60 flex items-center justify-center gap-2"
           >
-            Ingresar al Sistema
+            {isLoggingIn ? (
+              <>
+                <span className="animate-spin text-lg">⏳</span> Validando y Sincronizando...
+              </>
+            ) : (
+              'Ingresar al Sistema'
+            )}
           </button>
         </form>
 

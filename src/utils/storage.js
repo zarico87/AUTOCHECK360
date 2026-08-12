@@ -33,7 +33,34 @@ export const clearSession = () => {
 };
 
 // ─── TALLERES Y USUARIOS REGISTRADOS ─────────────────────
-import { saveWorkshopToFirestore } from '../firebase/config';
+import { saveWorkshopToFirestore, fetchWorkshopsFromFirestore } from '../firebase/config';
+
+export const syncWorkshopsFromFirestore = async () => {
+  try {
+    const cloudWorkshops = await fetchWorkshopsFromFirestore();
+    if (cloudWorkshops && Array.isArray(cloudWorkshops) && cloudWorkshops.length > 0) {
+      const localWorkshops = getRegisteredWorkshops();
+      const workshopMap = new Map();
+
+      // Cargar primero los locales
+      localWorkshops.forEach(w => {
+        if (w.usuario) workshopMap.set(w.usuario.toLowerCase(), w);
+      });
+
+      // Sobrescribir/Agregar los de la nube
+      cloudWorkshops.forEach(w => {
+        if (w.usuario) workshopMap.set(w.usuario.toLowerCase(), { ...workshopMap.get(w.usuario.toLowerCase()), ...w });
+      });
+
+      const merged = Array.from(workshopMap.values());
+      localStorage.setItem(REGISTERED_WORKSHOPS_KEY, JSON.stringify(merged));
+      return merged;
+    }
+  } catch (err) {
+    console.warn("No se pudo sincronizar usuarios desde Firestore:", err);
+  }
+  return getRegisteredWorkshops();
+};
 
 export const getRegisteredWorkshops = () => {
   try {
@@ -77,6 +104,18 @@ export const authenticateUser = (usernameOrEmail, password) => {
   }
   
   return { success: true, workshop };
+};
+
+export const authenticateUserAsync = async (usernameOrEmail, password) => {
+  // 1. Intentar autenticación local
+  let result = authenticateUser(usernameOrEmail, password);
+  if (result.success || result.error === 'INVALID_PASSWORD') {
+    return result;
+  }
+
+  // 2. Si no se encontró el usuario localmente, buscar en la nube (Firestore)
+  await syncWorkshopsFromFirestore();
+  return authenticateUser(usernameOrEmail, password);
 };
 
 export const addRegisteredWorkshop = (workshopData) => {
