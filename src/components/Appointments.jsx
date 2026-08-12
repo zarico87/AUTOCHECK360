@@ -30,13 +30,13 @@ const Appointments = () => {
   const [calYear, setCalYear] = useState(() => new Date(today).getFullYear());
   const [calMonth, setCalMonth] = useState(() => new Date(today).getMonth());
 
-  useEffect(() => {
-    loadAppointments();
+  const loadAppointments = React.useCallback(() => {
+    setAppointments(getAppointmentsByDate(selectedDate));
   }, [selectedDate]);
 
-  const loadAppointments = () => {
-    setAppointments(getAppointmentsByDate(selectedDate));
-  };
+  useEffect(() => {
+    loadAppointments();
+  }, [loadAppointments]);
 
   const takenHours = appointments.map(a => a.hora);
   const availableHours = HORARIOS.filter(h => !takenHours.includes(h));

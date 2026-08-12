@@ -33,42 +33,150 @@ export const clearSession = () => {
 };
 
 // ─── TALLERES Y USUARIOS REGISTRADOS ─────────────────────
+import { saveWorkshopToFirestore } from '../firebase/config';
+
 export const getRegisteredWorkshops = () => {
   try {
     const data = localStorage.getItem(REGISTERED_WORKSHOPS_KEY);
     if (data) return JSON.parse(data);
-    // Usuarios / talleres demo por defecto
+    // Usuarios / talleres demo por defecto con contraseñas por defecto
     const defaultWorkshops = [
-      { usuario: 'taller1', nombreTaller: 'Taller Mecánico Central', domicilio: 'Av. Colón 1234, Córdoba', telefono: '351-1234567', cuit: '20-30123456-7', email: 'contacto@tallercentral.com' },
-      { usuario: 'admin', nombreTaller: 'AutoCheck 360 Admin', domicilio: 'Calle Principal 500, Córdoba', telefono: '351-9998877', cuit: '20-99988776-5', email: 'admin@autocheck360.com' },
-      { usuario: 'mecanico', nombreTaller: 'Taller Mecánica Intangible', domicilio: 'Av. Patria 890, Córdoba', telefono: '351-4445566', cuit: '20-44455667-8', email: 'mecanico@taller.com' },
+      { usuario: 'taller1', password: 'Taller12!', nombreTaller: 'Taller Mecánico Central', domicilio: 'Av. Colón 1234, Córdoba', telefono: '351-1234567', cuit: '20-30123456-7', email: 'contacto@tallercentral.com' },
+      { usuario: 'admin', password: 'Admin360!', nombreTaller: 'AutoCheck 360 Admin', domicilio: 'Calle Principal 500, Córdoba', telefono: '351-9998877', cuit: '20-99988776-5', email: 'admin@autocheck360.com' },
+      { usuario: 'mecanico', password: 'Mecanico12!', nombreTaller: 'Taller Mecánica Intangible', domicilio: 'Av. Patria 890, Córdoba', telefono: '351-4445566', cuit: '20-44455667-8', email: 'mecanico@taller.com' },
     ];
     localStorage.setItem(REGISTERED_WORKSHOPS_KEY, JSON.stringify(defaultWorkshops));
+    defaultWorkshops.forEach(w => saveWorkshopToFirestore(w));
     return defaultWorkshops;
   } catch {
     return [];
   }
 };
 
-export const isUserRegistered = (username) => {
-  if (!username) return false;
+export const getWorkshopByUsernameOrEmail = (query) => {
+  if (!query) return null;
+  const clean = query.trim().toLowerCase();
   const workshops = getRegisteredWorkshops();
-  const clean = username.trim().toLowerCase();
-  return workshops.some(w => (w.usuario && w.usuario.toLowerCase() === clean) || (w.email && w.email.toLowerCase() === clean));
+  return workshops.find(w => 
+    (w.usuario && w.usuario.toLowerCase() === clean) || 
+    (w.email && w.email.toLowerCase() === clean)
+  ) || null;
+};
+
+export const isUserRegistered = (username) => {
+  return Boolean(getWorkshopByUsernameOrEmail(username));
+};
+
+export const authenticateUser = (usernameOrEmail, password) => {
+  const workshop = getWorkshopByUsernameOrEmail(usernameOrEmail);
+  if (!workshop) return { success: false, error: 'USER_NOT_FOUND' };
+  
+  // Si el usuario no tiene password grabado aún, aceptar password válido
+  if (workshop.password && workshop.password !== password) {
+    return { success: false, error: 'INVALID_PASSWORD' };
+  }
+  
+  return { success: true, workshop };
 };
 
 export const addRegisteredWorkshop = (workshopData) => {
   const workshops = getRegisteredWorkshops();
-  // Asignar un usuario por defecto derivado del nombre de taller si no fue especificado aún
   const usuarioGenerado = workshopData.usuario || workshopData.nombreTaller.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 8) || 'taller';
   const newWorkshop = {
     ...workshopData,
     usuario: usuarioGenerado,
+    password: workshopData.password || 'Taller12!',
     registradoEn: new Date().toISOString(),
   };
-  workshops.push(newWorkshop);
+
+  // Reemplazar si ya existía el usuario, o agregar
+  const existingIdx = workshops.findIndex(w => w.usuario?.toLowerCase() === usuarioGenerado.toLowerCase());
+  if (existingIdx >= 0) {
+    workshops[existingIdx] = newWorkshop;
+  } else {
+    workshops.push(newWorkshop);
+  }
+
   localStorage.setItem(REGISTERED_WORKSHOPS_KEY, JSON.stringify(workshops));
+  saveWorkshopToFirestore(newWorkshop);
   return newWorkshop;
+};
+
+export const updateWorkshopPassword = (usuario, currentPassword, newPassword) => {
+  const workshops = getRegisteredWorkshops();
+  const index = workshops.findIndex(w => w.usuario?.toLowerCase() === usuario.toLowerCase());
+  
+  if (index === -1) {
+    return { success: false, message: 'Usuario no encontrado.' };
+  }
+
+  const currentStoredPass = workshops[index].password;
+  if (currentStoredPass && currentStoredPass !== currentPassword) {
+    return { success: false, message: 'La contraseña actual ingresada es incorrecta.' };
+  }
+
+  workshops[index].password = newPassword;
+  localStorage.setItem(REGISTERED_WORKSHOPS_KEY, JSON.stringify(workshops));
+  saveWorkshopToFirestore(workshops[index]);
+
+  // Actualizar también la sesión si coincide
+  const session = getSession();
+  if (session && session.usuario?.toLowerCase() === usuario.toLowerCase()) {
+    setSession({
+      ...session,
+      password: newPassword
+    });
+  }
+
+  return { success: true, workshop: workshops[index] };
+};
+
+export const updateWorkshopProfile = (usuario, updatedFields) => {
+  const workshops = getRegisteredWorkshops();
+  const index = workshops.findIndex(w => w.usuario?.toLowerCase() === usuario.toLowerCase());
+
+  if (index === -1) {
+    return { success: false, message: 'Usuario no encontrado.' };
+  }
+
+  workshops[index] = {
+    ...workshops[index],
+    ...updatedFields
+  };
+
+  localStorage.setItem(REGISTERED_WORKSHOPS_KEY, JSON.stringify(workshops));
+  saveWorkshopToFirestore(workshops[index]);
+
+  // Actualizar sesión activa
+  const session = getSession();
+  if (session && session.usuario?.toLowerCase() === usuario.toLowerCase()) {
+    setSession({
+      ...session,
+      ...updatedFields,
+      nombreTaller: updatedFields.nombreTaller || session.nombreTaller,
+      email: updatedFields.email || session.email,
+      telefono: updatedFields.telefono || session.telefono,
+      domicilio: updatedFields.domicilio || session.domicilio,
+      cuit: updatedFields.cuit || session.cuit,
+    });
+  }
+
+  return { success: true, workshop: workshops[index] };
+};
+
+export const resetUserPassword = (identifier) => {
+  const workshop = getWorkshopByUsernameOrEmail(identifier);
+  if (!workshop) {
+    return { success: false, message: 'No se encontró ningún taller registrado con este usuario o email.' };
+  }
+
+  return {
+    success: true,
+    workshop,
+    user: workshop.usuario,
+    password: workshop.password || 'Taller12!',
+    email: workshop.email,
+  };
 };
 
 // ─── CORRELATIVO DE ÓRDENES ──────────────────────────────

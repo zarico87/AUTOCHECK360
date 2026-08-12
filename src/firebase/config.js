@@ -1,10 +1,8 @@
 // src/firebase/config.js
-import { initializeApp } from "firebase/app";
+import { initializeApp, getApps } from "firebase/app";
 import { getAuth } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore, doc, setDoc, collection, getDocs } from "firebase/firestore";
 
-// Configuración de tu proyecto de Firebase
-// Reemplaza estos valores con los de tu consola de Firebase
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -14,9 +12,59 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
-// Inicializar Firebase
-const app = initializeApp(firebaseConfig);
+let app = null;
+let auth = null;
+let db = null;
 
-// Exportar los servicios de Autenticación y Base de Datos (Firestore)
-export const auth = getAuth(app);
-export const db = getFirestore(app);
+const hasConfig = Boolean(
+  firebaseConfig.apiKey &&
+  firebaseConfig.projectId &&
+  firebaseConfig.apiKey !== 'undefined'
+);
+
+try {
+  if (hasConfig) {
+    app = !getApps().length ? initializeApp(firebaseConfig) : getApps()[0];
+    auth = getAuth(app);
+    db = getFirestore(app);
+    console.log("Firebase inicializado correctamente con el proyecto:", firebaseConfig.projectId);
+  } else {
+    console.log("Firebase no configurado aún (faltan variables VITE_FIREBASE_*). Operando en modo local.");
+  }
+} catch (err) {
+  console.warn("Error al inicializar Firebase, operando en almacenamiento local:", err.message);
+}
+
+export const isFirebaseConfigured = () => Boolean(db);
+
+export async function saveWorkshopToFirestore(workshop) {
+  if (!db || !workshop?.usuario) return false;
+  try {
+    const docRef = doc(db, "workshops", workshop.usuario.toLowerCase());
+    await setDoc(docRef, {
+      ...workshop,
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+    return true;
+  } catch (e) {
+    console.warn("Error al guardar en Firestore:", e);
+    return false;
+  }
+}
+
+export async function fetchWorkshopsFromFirestore() {
+  if (!db) return null;
+  try {
+    const querySnapshot = await getDocs(collection(db, "workshops"));
+    const list = [];
+    querySnapshot.forEach((doc) => {
+      list.push(doc.data());
+    });
+    return list;
+  } catch (e) {
+    console.warn("Error al obtener talleres de Firestore:", e);
+    return null;
+  }
+}
+
+export { auth, db };

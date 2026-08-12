@@ -1,0 +1,6 @@
+{
+  "name": "AutoCheck 360",
+  "description": "Sistema de gestión integral para taller mecánico. Órdenes de trabajo, turnos, checklists profesionales y más.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

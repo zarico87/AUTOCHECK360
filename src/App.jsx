@@ -7,8 +7,9 @@ import Dashboard from './components/Dashboard';
 import WorkOrderForm from './components/WorkOrderForm';
 import CompletedOrders from './components/CompletedOrders';
 import Appointments from './components/Appointments';
+import Profile from './components/Profile';
 import WhatsAppButton from './components/WhatsAppButton';
-import logo from './assets/img/logocompleto.jpeg';
+import Logo from './components/Logo';
 import { getSession, clearSession } from './utils/storage';
 
 // Componente de Navegación separado para acceder a useLocation y useNavigate
@@ -24,6 +25,7 @@ const NavBar = () => {
     { to: '/ordenes-listas', label: 'Órdenes Listas', icon: '✅' },
     { to: '/turnos', label: 'Turnos', icon: '📅' },
     { to: '/nueva-orden', label: 'Nueva Orden', icon: '➕' },
+    { to: '/perfil', label: 'Perfil', icon: '👤' },
   ];
 
   const handleLogout = (e) => {
@@ -50,12 +52,8 @@ const NavBar = () => {
       <div className="container mx-auto px-4 py-3 flex flex-col sm:flex-row justify-between items-center gap-2 sm:gap-0">
         <div className="flex items-center gap-3">
           <Link to="/dashboard" className="flex items-center gap-3 group">
-            <div className="bg-white/90 p-1 rounded-lg shadow-md group-hover:scale-105 transition-transform duration-300">
-              <img
-                src={logo}
-                alt="AutoCheck 360"
-                className="h-9 w-auto mix-blend-multiply bg-transparent"
-              />
+            <div className="p-1 rounded-lg group-hover:scale-105 transition-transform duration-300 flex items-center">
+              <Logo className="h-9 w-auto" alt="AutoCheck 360" />
             </div>
             <div>
               <h1 className="text-2xl font-bold tracking-tight">
@@ -134,6 +132,7 @@ function App() {
         <Route path="/nueva-orden" element={<AppLayout><WorkOrderForm /></AppLayout>} />
         <Route path="/ordenes-listas" element={<AppLayout><CompletedOrders /></AppLayout>} />
         <Route path="/turnos" element={<AppLayout><Appointments /></AppLayout>} />
+        <Route path="/perfil" element={<AppLayout><Profile /></AppLayout>} />
         
         {/* Redirect para rutas desconocidas */}
         <Route path="*" element={<Navigate to="/" replace />} />

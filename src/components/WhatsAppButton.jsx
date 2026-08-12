@@ -2,9 +2,9 @@
 import React from 'react';
 
 const WhatsAppButton = () => {
-  // Reemplazar TUNUMERO con el número real de WhatsApp (código de país sin +, sin espacios)
-  const whatsappNumber = '5491100000000';
-  const message = encodeURIComponent('Hola, necesito soporte con AutoCheck 360');
+  // Número de WhatsApp de soporte técnico: 3512469463 (formato internacional Argentina 549)
+  const whatsappNumber = '5493512469463';
+  const message = encodeURIComponent('Hola, necesito soporte técnico con AutoCheck 360');
 
   return (
     <a
