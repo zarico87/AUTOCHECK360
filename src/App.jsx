@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import './App.css';
@@ -10,7 +10,53 @@ import Appointments from './components/Appointments';
 import Profile from './components/Profile';
 import WhatsAppButton from './components/WhatsAppButton';
 import Logo from './components/Logo';
-import { getSession, clearSession } from './utils/storage';
+import { getSession, clearSession, syncWorkshopsFromFirestore, syncOrderCounterFromFirestore, syncOrdersFromFirestore, syncAppointmentsFromFirestore } from './utils/storage';
+
+// Global Sync Manager para mantener la sesión actualizada entre dispositivos (PC y móvil)
+const SyncManager = () => {
+  const session = getSession();
+
+  useEffect(() => {
+    if (session && session.usuario) {
+      const syncAll = async () => {
+        try {
+          // Sincronizar todos los datos críticos en background
+          await syncWorkshopsFromFirestore();
+          await syncOrderCounterFromFirestore();
+          await syncOrdersFromFirestore();
+          await syncAppointmentsFromFirestore();
+        } catch (error) {
+          console.warn("Global sync error:", error);
+        }
+      };
+
+      // Ejecutar sincronización inicial al cargar el layout
+      syncAll();
+
+      // Sincronizar cada vez que la pestaña del navegador vuelve a estar visible
+      const handleVisibilityChange = () => {
+        if (document.visibilityState === 'visible') {
+          syncAll();
+        }
+      };
+
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+      
+      // Sincronización periódica cada 2 minutos (opcional para mantener actualizado)
+      const intervalId = setInterval(() => {
+        syncAll();
+      }, 120000);
+
+      return () => {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+        clearInterval(intervalId);
+      };
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.usuario]);
+
+  return null; // Este componente no renderiza nada visible
+};
 
 // Componente de Navegación separado para acceder a useLocation y useNavigate
 const NavBar = () => {
@@ -108,6 +154,7 @@ const NavBar = () => {
 const AppLayout = ({ children }) => {
   return (
     <div className="min-h-screen flex flex-col bg-brand-gray">
+      <SyncManager />
       <NavBar />
       <main className="flex-grow container mx-auto px-4 py-6">
         {children}

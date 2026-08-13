@@ -1,16 +1,27 @@
 // src/components/CompletedOrders.jsx
 import React, { useState, useEffect } from 'react';
 import Swal from 'sweetalert2';
-import { getCompletedOrders, deleteOrder } from '../utils/storage';
+import { getCompletedOrders, deleteOrder, syncOrdersFromFirestore } from '../utils/storage';
 import { generateOrderPDF } from '../utils/pdfGenerator';
 
 const CompletedOrders = () => {
   const [orders, setOrders] = useState([]);
   const [filtroFecha, setFiltroFecha] = useState('');
   const [expandedId, setExpandedId] = useState(null);
+  const [syncing, setSyncing] = useState(true);
 
   useEffect(() => {
-    loadOrders();
+    const init = async () => {
+      setSyncing(true);
+      try {
+        await syncOrdersFromFirestore();
+      } catch (err) {
+        console.warn('Sync error:', err);
+      }
+      loadOrders();
+      setSyncing(false);
+    };
+    init();
   }, []);
 
   const loadOrders = () => {
@@ -85,6 +96,12 @@ const CompletedOrders = () => {
 
   return (
     <div className="space-y-6 animate-fadeIn">
+      {/* Indicador de sincronización */}
+      {syncing && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-700 text-sm px-4 py-2 rounded-lg flex items-center gap-2 animate-fadeIn">
+          <span className="animate-spin text-lg">⏳</span> Sincronizando datos desde la nube...
+        </div>
+      )}
       {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-gray-200 pb-4">
         <div>

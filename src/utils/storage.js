@@ -1,5 +1,18 @@
 // src/utils/storage.js
-// Capa de abstracción sobre localStorage — integrada con correlativo de órdenes, respaldo y registros de talleres
+// Capa de abstracción — localStorage como caché + Firestore como fuente de verdad
+
+import {
+  saveWorkshopToFirestore,
+  fetchWorkshopsFromFirestore,
+  saveOrderToFirestore,
+  deleteOrderFromFirestore,
+  fetchOrdersFromFirestore,
+  saveAppointmentToFirestore,
+  deleteAppointmentFromFirestore,
+  fetchAppointmentsFromFirestore,
+  saveOrderCounterToFirestore,
+  fetchOrderCounterFromFirestore,
+} from '../firebase/config';
 
 const ORDERS_KEY = 'autocheck360_orders';
 const APPOINTMENTS_KEY = 'autocheck360_appointments';
@@ -9,6 +22,28 @@ const REGISTERED_WORKSHOPS_KEY = 'autocheck360_registered_workshops';
 
 const INITIAL_ORDER_NUMBER = 1000;
 const ORDER_LIMIT = 2000;
+
+// ─── Helpers Generales ──────────────────────────────────
+const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+const getCollection = (key) => {
+  try {
+    const data = localStorage.getItem(key);
+    return data ? JSON.parse(data) : [];
+  } catch {
+    return [];
+  }
+};
+
+const saveCollection = (key, data) => {
+  localStorage.setItem(key, JSON.stringify(data));
+};
+
+/** Obtiene el usuario activo de la sesión (para keying datos en Firestore) */
+const getActiveUser = () => {
+  const session = getSession();
+  return session?.usuario?.toLowerCase() || null;
+};
 
 // ─── SESIÓN DE TALLER ─────────────────────────────────────
 export const getSession = () => {
@@ -33,7 +68,6 @@ export const clearSession = () => {
 };
 
 // ─── TALLERES Y USUARIOS REGISTRADOS ─────────────────────
-import { saveWorkshopToFirestore, fetchWorkshopsFromFirestore } from '../firebase/config';
 
 export const syncWorkshopsFromFirestore = async () => {
   try {
@@ -231,23 +265,29 @@ export const getNextOrderNumber = () => {
     counter = parseInt(counter, 10) + 1;
   }
   localStorage.setItem(counterKey, counter.toString());
+  // Sincronizar con Firestore
+  saveOrderCounterToFirestore(usuario, counter);
   return String(counter).padStart(8, '0');
 };
 
-// ─── Helpers Generales ──────────────────────────────────
-const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-const getCollection = (key) => {
+/**
+ * Sincroniza el contador de órdenes desde Firestore (para tener el último valor en nuevos dispositivos)
+ */
+export const syncOrderCounterFromFirestore = async () => {
+  const usuario = getActiveUser();
+  if (!usuario) return;
   try {
-    const data = localStorage.getItem(key);
-    return data ? JSON.parse(data) : [];
-  } catch {
-    return [];
+    const cloudCounter = await fetchOrderCounterFromFirestore(usuario);
+    if (cloudCounter !== null && cloudCounter !== undefined) {
+      const counterKey = `${ORDER_COUNTER_KEY}_${usuario}`;
+      const localCounter = parseInt(localStorage.getItem(counterKey) || '0', 10);
+      // Usar el mayor de ambos para no duplicar números
+      const finalCounter = Math.max(localCounter, cloudCounter);
+      localStorage.setItem(counterKey, finalCounter.toString());
+    }
+  } catch (err) {
+    console.warn("Error sincronizando contador de órdenes:", err);
   }
-};
-
-const saveCollection = (key, data) => {
-  localStorage.setItem(key, JSON.stringify(data));
 };
 
 // ─── ÓRDENES DE TRABAJO ─────────────────────────────────
@@ -272,6 +312,10 @@ export const addOrder = (orderData) => {
   orders.push(newOrder);
   saveCollection(ORDERS_KEY, orders);
 
+  // Sincronizar con Firestore
+  const usuario = getActiveUser();
+  if (usuario) saveOrderToFirestore(usuario, newOrder);
+
   // Verificar si alcanzó el límite de 2000 órdenes
   if (orders.length >= ORDER_LIMIT) {
     notifyOrderLimitReached(orders.length);
@@ -286,6 +330,11 @@ export const updateOrder = (id, updates) => {
   if (index === -1) return null;
   orders[index] = { ...orders[index], ...updates };
   saveCollection(ORDERS_KEY, orders);
+
+  // Sincronizar con Firestore
+  const usuario = getActiveUser();
+  if (usuario) saveOrderToFirestore(usuario, orders[index]);
+
   return orders[index];
 };
 
@@ -299,6 +348,10 @@ export const markOrderCompleted = (id) => {
 export const deleteOrder = (id) => {
   const orders = getOrders().filter(o => o.id !== id && o.numeroOrden !== id);
   saveCollection(ORDERS_KEY, orders);
+
+  // Sincronizar con Firestore
+  const usuario = getActiveUser();
+  if (usuario) deleteOrderFromFirestore(usuario, id);
 };
 
 export const clearAllOrders = () => {
@@ -313,6 +366,55 @@ export const getCompletedOrders = () => {
   return getOrders()
     .filter(o => o.estado === 'listo')
     .sort((a, b) => new Date(b.fechaCompletado) - new Date(a.fechaCompletado));
+};
+
+/**
+ * Sincroniza órdenes desde Firestore y las fusiona con las locales.
+ * Firestore tiene prioridad — lo más reciente gana.
+ */
+export const syncOrdersFromFirestore = async () => {
+  const usuario = getActiveUser();
+  if (!usuario) return getOrders();
+
+  try {
+    const cloudOrders = await fetchOrdersFromFirestore(usuario);
+    if (cloudOrders && Array.isArray(cloudOrders)) {
+      const localOrders = getOrders();
+      const orderMap = new Map();
+
+      // Cargar locales primero
+      localOrders.forEach(o => {
+        if (o.id) orderMap.set(o.id, o);
+      });
+
+      // Sobrescribir con los de la nube (tienen prioridad)
+      cloudOrders.forEach(o => {
+        if (o.id) {
+          const existing = orderMap.get(o.id);
+          if (existing) {
+            orderMap.set(o.id, { ...existing, ...o });
+          } else {
+            orderMap.set(o.id, o);
+          }
+        }
+      });
+
+      const merged = Array.from(orderMap.values());
+      saveCollection(ORDERS_KEY, merged);
+
+      // Subir las órdenes que estaban solo en local a Firestore
+      for (const order of localOrders) {
+        if (order.id && !cloudOrders.find(c => c.id === order.id)) {
+          saveOrderToFirestore(usuario, order);
+        }
+      }
+
+      return merged;
+    }
+  } catch (err) {
+    console.warn("Error sincronizando órdenes:", err);
+  }
+  return getOrders();
 };
 
 // ─── EXPORTACIÓN Y RESPALDO ──────────────────────────────
@@ -394,12 +496,69 @@ export const addAppointment = (appointmentData) => {
   };
   appointments.push(newAppointment);
   saveCollection(APPOINTMENTS_KEY, appointments);
+
+  // Sincronizar con Firestore
+  const usuario = getActiveUser();
+  if (usuario) saveAppointmentToFirestore(usuario, newAppointment);
+
   return newAppointment;
 };
 
 export const deleteAppointment = (id) => {
   const appointments = getAppointments().filter(a => a.id !== id);
   saveCollection(APPOINTMENTS_KEY, appointments);
+
+  // Sincronizar con Firestore
+  const usuario = getActiveUser();
+  if (usuario) deleteAppointmentFromFirestore(usuario, id);
+};
+
+/**
+ * Sincroniza turnos desde Firestore y los fusiona con los locales.
+ */
+export const syncAppointmentsFromFirestore = async () => {
+  const usuario = getActiveUser();
+  if (!usuario) return getAppointments();
+
+  try {
+    const cloudAppointments = await fetchAppointmentsFromFirestore(usuario);
+    if (cloudAppointments && Array.isArray(cloudAppointments)) {
+      const localAppointments = getAppointments();
+      const appointmentMap = new Map();
+
+      // Cargar locales primero
+      localAppointments.forEach(a => {
+        if (a.id) appointmentMap.set(a.id, a);
+      });
+
+      // Sobrescribir con los de la nube
+      cloudAppointments.forEach(a => {
+        if (a.id) {
+          const existing = appointmentMap.get(a.id);
+          if (existing) {
+            appointmentMap.set(a.id, { ...existing, ...a });
+          } else {
+            appointmentMap.set(a.id, a);
+          }
+        }
+      });
+
+      const merged = Array.from(appointmentMap.values());
+      saveCollection(APPOINTMENTS_KEY, merged);
+
+      // Subir los que estaban solo en local a Firestore
+      for (const apt of localAppointments) {
+        if (apt.id && !cloudAppointments.find(c => c.id === apt.id)) {
+          saveAppointmentToFirestore(usuario, apt);
+        }
+      }
+
+      return merged;
+    }
+  } catch (err) {
+    console.warn("Error sincronizando turnos:", err);
+  }
+  return getAppointments();
 };
 
 // ─── SEED DATA ─────────────────────────────────────────
@@ -490,6 +649,13 @@ export const seedDemoData = () => {
     ];
     saveCollection(ORDERS_KEY, demoOrders);
     localStorage.setItem(ORDER_COUNTER_KEY, '1002');
+
+    // Subir demo data a Firestore también
+    const usuario = getActiveUser();
+    if (usuario) {
+      demoOrders.forEach(o => saveOrderToFirestore(usuario, o));
+      saveOrderCounterToFirestore(usuario, 1002);
+    }
   }
 
   if (getAppointments().length === 0) {
@@ -500,5 +666,11 @@ export const seedDemoData = () => {
       { id: generateId(), nombre: 'Pedro Sánchez', patente: 'CE 654 IJ', modelo: 'Renault Sandero', fecha: todayStr, hora: '14:00', creadoEn: new Date().toISOString() },
     ];
     saveCollection(APPOINTMENTS_KEY, demoAppointments);
+
+    // Subir demo data a Firestore también
+    const usuario = getActiveUser();
+    if (usuario) {
+      demoAppointments.forEach(a => saveAppointmentToFirestore(usuario, a));
+    }
   }
 };

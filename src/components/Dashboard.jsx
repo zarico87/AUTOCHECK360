@@ -2,18 +2,31 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import Swal from 'sweetalert2';
-import { getPendingOrders, markOrderCompleted, deleteOrder, seedDemoData } from '../utils/storage';
+import { getPendingOrders, markOrderCompleted, deleteOrder, seedDemoData, syncOrdersFromFirestore, syncOrderCounterFromFirestore } from '../utils/storage';
 import { generateOrderPDF } from '../utils/pdfGenerator';
 
 const MAX_CARDS = 6;
 
 const Dashboard = () => {
   const [orders, setOrders] = useState([]);
+  const [syncing, setSyncing] = useState(true);
 
   useEffect(() => {
-    // Cargar datos de demo si es la primera vez
-    seedDemoData();
-    loadOrders();
+    const init = async () => {
+      setSyncing(true);
+      try {
+        // Sincronizar datos desde la nube antes de cargar
+        await syncOrderCounterFromFirestore();
+        await syncOrdersFromFirestore();
+      } catch (err) {
+        console.warn('Sync error (usando datos locales):', err);
+      }
+      // Cargar datos de demo si es la primera vez
+      seedDemoData();
+      loadOrders();
+      setSyncing(false);
+    };
+    init();
   }, []);
 
   const loadOrders = () => {
@@ -90,6 +103,12 @@ const Dashboard = () => {
 
   return (
     <div className="space-y-6 animate-fadeIn">
+      {/* Indicador de sincronización */}
+      {syncing && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-700 text-sm px-4 py-2 rounded-lg flex items-center gap-2 animate-fadeIn">
+          <span className="animate-spin text-lg">⏳</span> Sincronizando datos desde la nube...
+        </div>
+      )}
       {/* Cabecera del Dashboard */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-gray-200 pb-4">
         <div>

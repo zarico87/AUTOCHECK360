@@ -1,7 +1,7 @@
 // src/components/Appointments.jsx
 import React, { useState, useEffect } from 'react';
 import Swal from 'sweetalert2';
-import { getAppointmentsByDate, addAppointment, deleteAppointment, countAppointmentsByDate } from '../utils/storage';
+import { getAppointmentsByDate, addAppointment, deleteAppointment, countAppointmentsByDate, syncAppointmentsFromFirestore } from '../utils/storage';
 
 const MAX_TURNOS = 8;
 
@@ -25,6 +25,7 @@ const Appointments = () => {
   const [showModal, setShowModal] = useState(false);
   const [showCalendarModal, setShowCalendarModal] = useState(false);
   const [form, setForm] = useState({ nombre: '', patente: '', modelo: '', hora: '09:00' });
+  const [syncing, setSyncing] = useState(true);
 
   // Estado para la navegación del calendario mensual
   const [calYear, setCalYear] = useState(() => new Date(today).getFullYear());
@@ -35,7 +36,17 @@ const Appointments = () => {
   }, [selectedDate]);
 
   useEffect(() => {
-    loadAppointments();
+    const init = async () => {
+      setSyncing(true);
+      try {
+        await syncAppointmentsFromFirestore();
+      } catch (err) {
+        console.warn('Sync turnos error:', err);
+      }
+      loadAppointments();
+      setSyncing(false);
+    };
+    init();
   }, [loadAppointments]);
 
   const takenHours = appointments.map(a => a.hora);
@@ -165,6 +176,12 @@ const Appointments = () => {
 
   return (
     <div className="space-y-6 animate-fadeIn">
+      {/* Indicador de sincronización */}
+      {syncing && (
+        <div className="bg-blue-50 border border-blue-200 text-blue-700 text-sm px-4 py-2 rounded-lg flex items-center gap-2 animate-fadeIn">
+          <span className="animate-spin text-lg">⏳</span> Sincronizando datos desde la nube...
+        </div>
+      )}
       {/* Header con controles de fecha y calendario */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-gray-200 pb-4">
         <div>
