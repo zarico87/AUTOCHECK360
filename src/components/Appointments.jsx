@@ -1,7 +1,7 @@
 // src/components/Appointments.jsx
 import React, { useState, useEffect } from 'react';
 import Swal from 'sweetalert2';
-import { getAppointmentsByDate, addAppointment, deleteAppointment, countAppointmentsByDate, syncAppointmentsFromFirestore } from '../utils/storage';
+import { getSession, getAppointmentsByDate, addAppointment, deleteAppointment, countAppointmentsByDate, syncAppointmentsFromFirestore } from '../utils/storage';
 
 const MAX_TURNOS = 8;
 
@@ -24,7 +24,7 @@ const Appointments = () => {
   const [appointments, setAppointments] = useState([]);
   const [showModal, setShowModal] = useState(false);
   const [showCalendarModal, setShowCalendarModal] = useState(false);
-  const [form, setForm] = useState({ nombre: '', patente: '', modelo: '', hora: '09:00' });
+  const [form, setForm] = useState({ nombre: '', patente: '', modelo: '', hora: '09:00', telefono: '' });
   const [syncing, setSyncing] = useState(true);
 
   // Estado para la navegación del calendario mensual
@@ -76,18 +76,34 @@ const Appointments = () => {
       return;
     }
 
-    Swal.fire({
-      toast: true,
-      position: 'top-end',
-      icon: 'success',
-      title: 'Turno agregado',
-      showConfirmButton: false,
-      timer: 1500,
-    });
+    const session = getSession();
+    const tallerName = session?.nombreTaller || 'nuestro taller';
 
-    setForm({ nombre: '', patente: '', modelo: '', hora: availableHours[0] || '09:00' });
-    setShowModal(false);
-    loadAppointments();
+    // Formatear la fecha
+    const [year, month, day] = selectedDate.split('-');
+    const fechaFormateada = `${day}/${month}/${year}`;
+
+    // Construir mensaje de WhatsApp
+    const mensaje = `Hola ${form.nombre},\n\nTenés un turno reservado en *${tallerName}*.\n\n📅 Fecha: *${fechaFormateada}*\n⏰ Hora: *${form.hora} hs.*\n🚗 Vehículo: *${form.modelo}* (Patente: *${form.patente.toUpperCase()}*)\n\n¡Te esperamos!`;
+    const wappUrl = `https://wa.me/${form.telefono.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(mensaje)}`;
+
+    Swal.fire({
+      title: '¡Turno guardado!',
+      text: '¿Querés enviar la confirmación por WhatsApp al cliente?',
+      icon: 'success',
+      showCancelButton: true,
+      confirmButtonColor: '#25D366', // WhatsApp green
+      cancelButtonColor: '#6B7280',
+      confirmButtonText: 'Sí, enviar WhatsApp',
+      cancelButtonText: 'Solo guardar',
+    }).then((res) => {
+      if (res.isConfirmed) {
+        window.open(wappUrl, '_blank');
+      }
+      setForm({ nombre: '', patente: '', modelo: '', hora: availableHours[0] || '09:00', telefono: '' });
+      setShowModal(false);
+      loadAppointments();
+    });
   };
 
   const handleDelete = (id, nombre) => {
@@ -254,7 +270,7 @@ const Appointments = () => {
             if (turnosRestantes === 0) {
               Swal.fire({ title: 'Día completo', text: 'No hay más turnos disponibles para este día.', icon: 'warning', confirmButtonColor: '#F97316' });
             } else {
-              setForm({ nombre: '', patente: '', modelo: '', hora: availableHours[0] || '09:00' });
+              setForm({ nombre: '', patente: '', modelo: '', hora: availableHours[0] || '09:00', telefono: '' });
               setShowModal(true);
             }
           }}
@@ -472,6 +488,18 @@ const Appointments = () => {
                   onChange={(e) => setForm({ ...form, patente: e.target.value })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-blue outline-none uppercase"
                   placeholder="Ej: AB 123 CD"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-bold text-brand-grayDark mb-1">Teléfono (WhatsApp)</label>
+                <input
+                  type="tel"
+                  value={form.telefono}
+                  onChange={(e) => setForm({ ...form, telefono: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-blue outline-none"
+                  placeholder="Ej: 3511234567 (código de área + número)"
                   required
                 />
               </div>

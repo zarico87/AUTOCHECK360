@@ -2,8 +2,10 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import Swal from 'sweetalert2';
-import { getPendingOrders, markOrderCompleted, deleteOrder, seedDemoData, syncOrdersFromFirestore, syncOrderCounterFromFirestore } from '../utils/storage';
+import { getSession, getPendingOrders, markOrderCompleted, deleteOrder, seedDemoData, syncOrderCounterFromFirestore } from '../utils/storage';
 import { generateOrderPDF } from '../utils/pdfGenerator';
+import { db } from '../firebase/config';
+import { collection, onSnapshot } from 'firebase/firestore';
 
 const MAX_CARDS = 6;
 
@@ -12,21 +14,56 @@ const Dashboard = () => {
   const [syncing, setSyncing] = useState(true);
 
   useEffect(() => {
+    let unsubscribe = () => {};
+
     const init = async () => {
       setSyncing(true);
       try {
-        // Sincronizar datos desde la nube antes de cargar
         await syncOrderCounterFromFirestore();
-        await syncOrdersFromFirestore();
+        seedDemoData();
+
+        const session = getSession();
+        const usuario = session?.usuario?.toLowerCase();
+
+        if (db && usuario) {
+          const ordersRef = collection(db, "workshops", usuario, "orders");
+          unsubscribe = onSnapshot(ordersRef, (snapshot) => {
+            const firestoreOrders = [];
+            snapshot.forEach((doc) => {
+              firestoreOrders.push(doc.data());
+            });
+
+            const ORDERS_KEY = 'autocheck360_orders';
+            const localData = localStorage.getItem(ORDERS_KEY);
+            const localOrders = localData ? JSON.parse(localData) : [];
+            
+            const orderMap = new Map();
+            localOrders.forEach(o => { if (o.id) orderMap.set(o.id, o); });
+            firestoreOrders.forEach(o => { if (o.id) orderMap.set(o.id, { ...orderMap.get(o.id), ...o }); });
+            
+            const merged = Array.from(orderMap.values());
+            localStorage.setItem(ORDERS_KEY, JSON.stringify(merged));
+            
+            setOrders(merged.filter(o => o.estado === 'pendiente' || o.estado === 'en_proceso'));
+            setSyncing(false);
+          }, (error) => {
+            console.error("Error al sincronizar en tiempo real:", error);
+            loadOrders();
+            setSyncing(false);
+          });
+        } else {
+          loadOrders();
+          setSyncing(false);
+        }
       } catch (err) {
         console.warn('Sync error (usando datos locales):', err);
+        loadOrders();
+        setSyncing(false);
       }
-      // Cargar datos de demo si es la primera vez
-      seedDemoData();
-      loadOrders();
-      setSyncing(false);
     };
     init();
+
+    return () => unsubscribe();
   }, []);
 
   const loadOrders = () => {
