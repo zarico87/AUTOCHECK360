@@ -11,6 +11,7 @@ import Profile from './components/Profile';
 import WhatsAppButton from './components/WhatsAppButton';
 import Logo from './components/Logo';
 import { getSession, clearSession, syncWorkshopsFromFirestore, syncOrderCounterFromFirestore, syncOrdersFromFirestore, syncAppointmentsFromFirestore } from './utils/storage';
+import { ensureSessionAuth } from './firebase/config';
 
 // Global Sync Manager para mantener la sesión actualizada entre dispositivos (PC y móvil)
 const SyncManager = () => {
@@ -20,6 +21,8 @@ const SyncManager = () => {
     if (session && session.usuario) {
       const syncAll = async () => {
         try {
+          // Asegurar que la sesión de Firebase Auth esté activa antes de sincronizar
+          await ensureSessionAuth(session);
           // Sincronizar todos los datos críticos en background
           await syncWorkshopsFromFirestore();
           await syncOrderCounterFromFirestore();

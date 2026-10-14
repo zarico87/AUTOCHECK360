@@ -188,7 +188,7 @@ const Login = () => {
     setIsSendingRegister(true);
 
     // Guardar taller registrado en localStorage y Firestore
-    const nuevoTaller = addRegisteredWorkshop({
+    const nuevoTaller = await addRegisteredWorkshop({
       ...regData,
       usuario: finalUsuario,
       password: finalPassword,

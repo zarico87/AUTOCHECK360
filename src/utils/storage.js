@@ -12,6 +12,10 @@ import {
   fetchAppointmentsFromFirestore,
   saveOrderCounterToFirestore,
   fetchOrderCounterFromFirestore,
+  signInOrCreateFirebaseAuth,
+  signOutFirebaseAuth,
+  getCurrentUid,
+  auth,
 } from '../firebase/config';
 
 const ORDERS_KEY = 'autocheck360_orders';
@@ -65,6 +69,7 @@ export const setSession = (sessionData) => {
 
 export const clearSession = () => {
   localStorage.removeItem(SESSION_KEY);
+  signOutFirebaseAuth();
 };
 
 // ─── TALLERES Y USUARIOS REGISTRADOS ─────────────────────
@@ -144,15 +149,46 @@ export const authenticateUserAsync = async (usernameOrEmail, password) => {
   // 1. Intentar autenticación local
   let result = authenticateUser(usernameOrEmail, password);
   if (result.success || result.error === 'INVALID_PASSWORD') {
+    // Si las credenciales locales son válidas, autenticar en Firebase Auth
+    if (result.success) {
+      try {
+        const uid = await signInOrCreateFirebaseAuth(
+          result.workshop.email || result.workshop.usuario,
+          password || result.workshop.password
+        );
+        if (uid) {
+          result.workshop = { ...result.workshop, uid };
+          saveWorkshopToFirestore(result.workshop);
+        }
+      } catch (e) {
+        console.warn('Firebase Auth vinculación fallida (continuando localmente):', e);
+      }
+    }
     return result;
   }
 
-  // 2. Si no se encontró el usuario localmente, buscar en la nube (Firestore)
+  // 2. Si no se encontró el usuario localmente, intentar login con Firebase Auth directamente
+  try {
+    const uid = await signInOrCreateFirebaseAuth(usernameOrEmail, password);
+    if (uid) {
+      await syncWorkshopsFromFirestore();
+      result = authenticateUser(usernameOrEmail, password);
+      if (result.success) {
+        result.workshop = { ...result.workshop, uid };
+        saveWorkshopToFirestore(result.workshop);
+        return result;
+      }
+    }
+  } catch (e) {
+    console.warn('Firebase Auth sincronización remota fallida:', e);
+  }
+
+  // 3. Fallback: intentar sincronizar de Firestore y reintentar
   await syncWorkshopsFromFirestore();
   return authenticateUser(usernameOrEmail, password);
 };
 
-export const addRegisteredWorkshop = (workshopData) => {
+export const addRegisteredWorkshop = async (workshopData) => {
   const workshops = getRegisteredWorkshops();
   const usuarioGenerado = workshopData.usuario || workshopData.nombreTaller.toLowerCase().replace(/[^a-z0-9]/g, '').substring(0, 8) || 'taller';
   const newWorkshop = {
@@ -161,6 +197,19 @@ export const addRegisteredWorkshop = (workshopData) => {
     password: workshopData.password || 'Taller12!',
     registradoEn: new Date().toISOString(),
   };
+
+  // Registrar en Firebase Authentication
+  try {
+    const uid = await signInOrCreateFirebaseAuth(
+      newWorkshop.email || newWorkshop.usuario,
+      newWorkshop.password
+    );
+    if (uid) {
+      newWorkshop.uid = uid;
+    }
+  } catch (err) {
+    console.warn("No se pudo registrar en Firebase Auth:", err);
+  }
 
   // Reemplazar si ya existía el usuario, o agregar
   const existingIdx = workshops.findIndex(w => w.usuario?.toLowerCase() === usuarioGenerado.toLowerCase());
