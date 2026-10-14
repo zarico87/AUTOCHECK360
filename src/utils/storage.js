@@ -74,31 +74,56 @@ export const clearSession = () => {
 
 // ─── TALLERES Y USUARIOS REGISTRADOS ─────────────────────
 
-export const syncWorkshopsFromFirestore = async () => {
-  try {
-    const cloudWorkshops = await fetchWorkshopsFromFirestore();
-    if (cloudWorkshops && Array.isArray(cloudWorkshops) && cloudWorkshops.length > 0) {
-      const localWorkshops = getRegisteredWorkshops();
-      const workshopMap = new Map();
+let workshopsSyncPromise = null;
+let lastWorkshopsSyncTime = 0;
 
-      // Cargar primero los locales
-      localWorkshops.forEach(w => {
-        if (w.usuario) workshopMap.set(w.usuario.toLowerCase(), w);
-      });
+let ordersSyncPromise = null;
+let lastOrdersSyncTime = 0;
 
-      // Sobrescribir/Agregar los de la nube
-      cloudWorkshops.forEach(w => {
-        if (w.usuario) workshopMap.set(w.usuario.toLowerCase(), { ...workshopMap.get(w.usuario.toLowerCase()), ...w });
-      });
+let appointmentsSyncPromise = null;
+let lastAppointmentsSyncTime = 0;
 
-      const merged = Array.from(workshopMap.values());
-      localStorage.setItem(REGISTERED_WORKSHOPS_KEY, JSON.stringify(merged));
-      return merged;
-    }
-  } catch (err) {
-    console.warn("No se pudo sincronizar usuarios desde Firestore:", err);
+let counterSyncPromise = null;
+let lastCounterSyncTime = 0;
+
+export const syncWorkshopsFromFirestore = async (force = false) => {
+  const now = Date.now();
+  if (!force && now - lastWorkshopsSyncTime < 20000) {
+    return getRegisteredWorkshops();
   }
-  return getRegisteredWorkshops();
+  if (workshopsSyncPromise) {
+    return workshopsSyncPromise;
+  }
+  workshopsSyncPromise = (async () => {
+    try {
+      const cloudWorkshops = await fetchWorkshopsFromFirestore();
+      if (cloudWorkshops && Array.isArray(cloudWorkshops) && cloudWorkshops.length > 0) {
+        const localWorkshops = getRegisteredWorkshops();
+        const workshopMap = new Map();
+
+        // Cargar primero los locales
+        localWorkshops.forEach(w => {
+          if (w.usuario) workshopMap.set(w.usuario.toLowerCase(), w);
+        });
+
+        // Sobrescribir/Agregar los de la nube
+        cloudWorkshops.forEach(w => {
+          if (w.usuario) workshopMap.set(w.usuario.toLowerCase(), { ...workshopMap.get(w.usuario.toLowerCase()), ...w });
+        });
+
+        const merged = Array.from(workshopMap.values());
+        localStorage.setItem(REGISTERED_WORKSHOPS_KEY, JSON.stringify(merged));
+        lastWorkshopsSyncTime = Date.now();
+        return merged;
+      }
+    } catch (err) {
+      console.warn("No se pudo sincronizar usuarios desde Firestore:", err);
+    } finally {
+      workshopsSyncPromise = null;
+    }
+    return getRegisteredWorkshops();
+  })();
+  return workshopsSyncPromise;
 };
 
 export const getRegisteredWorkshops = () => {
@@ -322,21 +347,34 @@ export const getNextOrderNumber = () => {
 /**
  * Sincroniza el contador de órdenes desde Firestore (para tener el último valor en nuevos dispositivos)
  */
-export const syncOrderCounterFromFirestore = async () => {
+export const syncOrderCounterFromFirestore = async (force = false) => {
   const usuario = getActiveUser();
   if (!usuario) return;
-  try {
-    const cloudCounter = await fetchOrderCounterFromFirestore(usuario);
-    if (cloudCounter !== null && cloudCounter !== undefined) {
-      const counterKey = `${ORDER_COUNTER_KEY}_${usuario}`;
-      const localCounter = parseInt(localStorage.getItem(counterKey) || '0', 10);
-      // Usar el mayor de ambos para no duplicar números
-      const finalCounter = Math.max(localCounter, cloudCounter);
-      localStorage.setItem(counterKey, finalCounter.toString());
-    }
-  } catch (err) {
-    console.warn("Error sincronizando contador de órdenes:", err);
+  const now = Date.now();
+  if (!force && now - lastCounterSyncTime < 20000) {
+    return;
   }
+  if (counterSyncPromise) {
+    return counterSyncPromise;
+  }
+  counterSyncPromise = (async () => {
+    try {
+      const cloudCounter = await fetchOrderCounterFromFirestore(usuario);
+      if (cloudCounter !== null && cloudCounter !== undefined) {
+        const counterKey = `${ORDER_COUNTER_KEY}_${usuario}`;
+        const localCounter = parseInt(localStorage.getItem(counterKey) || '0', 10);
+        // Usar el mayor de ambos para no duplicar números
+        const finalCounter = Math.max(localCounter, cloudCounter);
+        localStorage.setItem(counterKey, finalCounter.toString());
+        lastCounterSyncTime = Date.now();
+      }
+    } catch (err) {
+      console.warn("Error sincronizando contador de órdenes:", err);
+    } finally {
+      counterSyncPromise = null;
+    }
+  })();
+  return counterSyncPromise;
 };
 
 // ─── ÓRDENES DE TRABAJO ─────────────────────────────────
@@ -421,49 +459,64 @@ export const getCompletedOrders = () => {
  * Sincroniza órdenes desde Firestore y las fusiona con las locales.
  * Firestore tiene prioridad — lo más reciente gana.
  */
-export const syncOrdersFromFirestore = async () => {
+export const syncOrdersFromFirestore = async (force = false) => {
   const usuario = getActiveUser();
   if (!usuario) return getOrders();
 
-  try {
-    const cloudOrders = await fetchOrdersFromFirestore(usuario);
-    if (cloudOrders && Array.isArray(cloudOrders)) {
-      const localOrders = getOrders();
-      const orderMap = new Map();
-
-      // Cargar locales primero
-      localOrders.forEach(o => {
-        if (o.id) orderMap.set(o.id, o);
-      });
-
-      // Sobrescribir con los de la nube (tienen prioridad)
-      cloudOrders.forEach(o => {
-        if (o.id) {
-          const existing = orderMap.get(o.id);
-          if (existing) {
-            orderMap.set(o.id, { ...existing, ...o });
-          } else {
-            orderMap.set(o.id, o);
-          }
-        }
-      });
-
-      const merged = Array.from(orderMap.values());
-      saveCollection(ORDERS_KEY, merged);
-
-      // Subir las órdenes que estaban solo en local a Firestore
-      for (const order of localOrders) {
-        if (order.id && !cloudOrders.find(c => c.id === order.id)) {
-          saveOrderToFirestore(usuario, order);
-        }
-      }
-
-      return merged;
-    }
-  } catch (err) {
-    console.warn("Error sincronizando órdenes:", err);
+  const now = Date.now();
+  if (!force && now - lastOrdersSyncTime < 15000) {
+    return getOrders();
   }
-  return getOrders();
+
+  if (ordersSyncPromise) {
+    return ordersSyncPromise;
+  }
+
+  ordersSyncPromise = (async () => {
+    try {
+      const cloudOrders = await fetchOrdersFromFirestore(usuario);
+      if (cloudOrders && Array.isArray(cloudOrders)) {
+        const localOrders = getOrders();
+        const orderMap = new Map();
+
+        // Cargar locales primero
+        localOrders.forEach(o => {
+          if (o.id) orderMap.set(o.id, o);
+        });
+
+        // Sobrescribir con los de la nube (tienen prioridad)
+        cloudOrders.forEach(o => {
+          if (o.id) {
+            const existing = orderMap.get(o.id);
+            if (existing) {
+              orderMap.set(o.id, { ...existing, ...o });
+            } else {
+              orderMap.set(o.id, o);
+            }
+          }
+        });
+
+        const merged = Array.from(orderMap.values());
+        saveCollection(ORDERS_KEY, merged);
+        lastOrdersSyncTime = Date.now();
+
+        // Subir las órdenes locales faltantes en Firestore en segundo plano (no bloqueante)
+        const missing = localOrders.filter(o => o.id && !cloudOrders.find(c => c.id === o.id));
+        if (missing.length > 0) {
+          Promise.allSettled(missing.map(o => saveOrderToFirestore(usuario, o))).catch(() => {});
+        }
+
+        return merged;
+      }
+    } catch (err) {
+      console.warn("Error sincronizando órdenes:", err);
+    } finally {
+      ordersSyncPromise = null;
+    }
+    return getOrders();
+  })();
+
+  return ordersSyncPromise;
 };
 
 // ─── EXPORTACIÓN Y RESPALDO ──────────────────────────────
@@ -565,49 +618,64 @@ export const deleteAppointment = (id) => {
 /**
  * Sincroniza turnos desde Firestore y los fusiona con los locales.
  */
-export const syncAppointmentsFromFirestore = async () => {
+export const syncAppointmentsFromFirestore = async (force = false) => {
   const usuario = getActiveUser();
   if (!usuario) return getAppointments();
 
-  try {
-    const cloudAppointments = await fetchAppointmentsFromFirestore(usuario);
-    if (cloudAppointments && Array.isArray(cloudAppointments)) {
-      const localAppointments = getAppointments();
-      const appointmentMap = new Map();
-
-      // Cargar locales primero
-      localAppointments.forEach(a => {
-        if (a.id) appointmentMap.set(a.id, a);
-      });
-
-      // Sobrescribir con los de la nube
-      cloudAppointments.forEach(a => {
-        if (a.id) {
-          const existing = appointmentMap.get(a.id);
-          if (existing) {
-            appointmentMap.set(a.id, { ...existing, ...a });
-          } else {
-            appointmentMap.set(a.id, a);
-          }
-        }
-      });
-
-      const merged = Array.from(appointmentMap.values());
-      saveCollection(APPOINTMENTS_KEY, merged);
-
-      // Subir los que estaban solo en local a Firestore
-      for (const apt of localAppointments) {
-        if (apt.id && !cloudAppointments.find(c => c.id === apt.id)) {
-          saveAppointmentToFirestore(usuario, apt);
-        }
-      }
-
-      return merged;
-    }
-  } catch (err) {
-    console.warn("Error sincronizando turnos:", err);
+  const now = Date.now();
+  if (!force && now - lastAppointmentsSyncTime < 15000) {
+    return getAppointments();
   }
-  return getAppointments();
+
+  if (appointmentsSyncPromise) {
+    return appointmentsSyncPromise;
+  }
+
+  appointmentsSyncPromise = (async () => {
+    try {
+      const cloudAppointments = await fetchAppointmentsFromFirestore(usuario);
+      if (cloudAppointments && Array.isArray(cloudAppointments)) {
+        const localAppointments = getAppointments();
+        const appointmentMap = new Map();
+
+        // Cargar locales primero
+        localAppointments.forEach(a => {
+          if (a.id) appointmentMap.set(a.id, a);
+        });
+
+        // Sobrescribir con los de la nube
+        cloudAppointments.forEach(a => {
+          if (a.id) {
+            const existing = appointmentMap.get(a.id);
+            if (existing) {
+              appointmentMap.set(a.id, { ...existing, ...a });
+            } else {
+              appointmentMap.set(a.id, a);
+            }
+          }
+        });
+
+        const merged = Array.from(appointmentMap.values());
+        saveCollection(APPOINTMENTS_KEY, merged);
+        lastAppointmentsSyncTime = Date.now();
+
+        // Subir turnos locales faltantes a Firestore en segundo plano (no bloqueante)
+        const missing = localAppointments.filter(apt => apt.id && !cloudAppointments.find(c => c.id === apt.id));
+        if (missing.length > 0) {
+          Promise.allSettled(missing.map(apt => saveAppointmentToFirestore(usuario, apt))).catch(() => {});
+        }
+
+        return merged;
+      }
+    } catch (err) {
+      console.warn("Error sincronizando turnos:", err);
+    } finally {
+      appointmentsSyncPromise = null;
+    }
+    return getAppointments();
+  })();
+
+  return appointmentsSyncPromise;
 };
 
 // ─── SEED DATA ─────────────────────────────────────────

@@ -10,17 +10,24 @@ import { collection, onSnapshot } from 'firebase/firestore';
 const MAX_CARDS = 6;
 
 const Dashboard = () => {
-  const [orders, setOrders] = useState([]);
-  const [syncing, setSyncing] = useState(true);
+  const [orders, setOrders] = useState(() => getPendingOrders());
+  const [syncing, setSyncing] = useState(false);
+
+  const loadOrders = () => {
+    setOrders(getPendingOrders());
+  };
 
   useEffect(() => {
     let unsubscribe = () => {};
 
+    // Carga inmediata de datos locales
+    loadOrders();
+
     const init = async () => {
-      setSyncing(true);
       try {
-        await syncOrderCounterFromFirestore();
         seedDemoData();
+        // Sincronizar contador en background sin bloquear la interfaz
+        syncOrderCounterFromFirestore().catch(() => {});
 
         const session = getSession();
         const usuario = session?.usuario?.toLowerCase();
@@ -65,10 +72,6 @@ const Dashboard = () => {
 
     return () => unsubscribe();
   }, []);
-
-  const loadOrders = () => {
-    setOrders(getPendingOrders());
-  };
 
   // Función para determinar los colores de la tarjeta según el estado
   const getStatusConfig = (estado) => {

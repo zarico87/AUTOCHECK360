@@ -1,5 +1,6 @@
 // src/components/Profile.jsx
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import {
   getSession,
@@ -120,15 +121,27 @@ const Profile = () => {
           </div>
         </div>
 
-        {/* Datos de Sesión */}
+        {/* Datos de Sesión con enlace al Dashboard al hacer click en el nombre */}
         <div className="bg-blue-50 p-4 rounded-xl border border-blue-200 mb-6 flex flex-wrap items-center justify-between gap-2">
           <div>
             <span className="text-xs font-semibold text-blue-600 uppercase tracking-wider block">Usuario Activo</span>
-            <span className="text-lg font-bold text-brand-blue font-mono">{session?.usuario || 'Invitado'}</span>
+            <Link
+              to="/dashboard"
+              title="Ir al Dashboard"
+              className="text-lg font-bold text-brand-blue hover:text-blue-900 hover:underline font-mono cursor-pointer transition-colors"
+            >
+              {session?.usuario || 'Invitado'}
+            </Link>
           </div>
           <div>
             <span className="text-xs font-semibold text-blue-600 uppercase tracking-wider block">Taller Registrado</span>
-            <span className="text-sm font-semibold text-gray-800">{formData.nombreTaller || 'Taller sin nombre'}</span>
+            <Link
+              to="/dashboard"
+              title="Ir al Dashboard"
+              className="text-sm font-semibold text-gray-800 hover:text-brand-blue hover:underline cursor-pointer transition-colors flex items-center gap-1"
+            >
+              <span>🏭</span> {formData.nombreTaller || 'Taller sin nombre'}
+            </Link>
           </div>
         </div>
 

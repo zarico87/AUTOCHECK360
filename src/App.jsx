@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate, useNavigate } from 'react-router-dom';
+import React, { useEffect, useRef } from 'react';
+import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate, useNavigate, Outlet } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import './App.css';
 import Login from './components/Login';
@@ -16,36 +16,45 @@ import { ensureSessionAuth } from './firebase/config';
 // Global Sync Manager para mantener la sesión actualizada entre dispositivos (PC y móvil)
 const SyncManager = () => {
   const session = getSession();
+  const syncingRef = useRef(false);
 
   useEffect(() => {
     if (session && session.usuario) {
       const syncAll = async () => {
+        if (syncingRef.current) return;
+        syncingRef.current = true;
         try {
           // Asegurar que la sesión de Firebase Auth esté activa antes de sincronizar
           await ensureSessionAuth(session);
-          // Sincronizar todos los datos críticos en background
-          await syncWorkshopsFromFirestore();
-          await syncOrderCounterFromFirestore();
-          await syncOrdersFromFirestore();
-          await syncAppointmentsFromFirestore();
+          // Sincronizar todos los datos críticos en background en paralelo
+          await Promise.allSettled([
+            syncWorkshopsFromFirestore(),
+            syncOrderCounterFromFirestore(),
+            syncOrdersFromFirestore(),
+            syncAppointmentsFromFirestore()
+          ]);
         } catch (error) {
           console.warn("Global sync error:", error);
+        } finally {
+          syncingRef.current = false;
         }
       };
 
-      // Ejecutar sincronización inicial al cargar el layout
+      // Ejecutar sincronización inicial en background una sola vez
       syncAll();
 
-      // Sincronizar cada vez que la pestaña del navegador vuelve a estar visible
+      // Sincronizar cada vez que la pestaña del navegador vuelve a estar visible (con límite de frecuencia)
+      let lastVisibleSync = Date.now();
       const handleVisibilityChange = () => {
-        if (document.visibilityState === 'visible') {
+        if (document.visibilityState === 'visible' && Date.now() - lastVisibleSync > 60000) {
+          lastVisibleSync = Date.now();
           syncAll();
         }
       };
 
       document.addEventListener('visibilitychange', handleVisibilityChange);
       
-      // Sincronización periódica cada 2 minutos (opcional para mantener actualizado)
+      // Sincronización periódica cada 2 minutos
       const intervalId = setInterval(() => {
         syncAll();
       }, 120000);
@@ -100,7 +109,7 @@ const NavBar = () => {
     <header className="bg-gradient-to-r from-blue-900 via-brand-blue to-blue-800 text-white shadow-lg">
       <div className="container mx-auto px-4 py-3 flex flex-col sm:flex-row justify-between items-center gap-2 sm:gap-0">
         <div className="flex items-center gap-3">
-          <Link to="/dashboard" className="flex items-center gap-3 group">
+          <Link to="/dashboard" className="flex items-center gap-3 group" title="Ir al Dashboard">
             <div className="p-1 rounded-lg group-hover:scale-105 transition-transform duration-300 flex items-center">
               <Logo className="h-9 w-auto" alt="AutoCheck 360" />
             </div>
@@ -110,9 +119,13 @@ const NavBar = () => {
               </h1>
             </div>
           </Link>
-          <span className="hidden md:inline-flex items-center gap-1.5 text-xs bg-white/15 px-3 py-1 rounded-full text-blue-100 font-medium border border-white/20 shadow-inner">
+          <Link
+            to="/dashboard"
+            title="Ir al Dashboard"
+            className="hidden md:inline-flex items-center gap-1.5 text-xs bg-white/15 hover:bg-white/25 active:scale-95 px-3 py-1 rounded-full text-blue-100 hover:text-white font-medium border border-white/20 shadow-inner transition-all duration-200 cursor-pointer"
+          >
             <span>🏭</span> {nombreTaller}
-          </span>
+          </Link>
         </div>
         
         <nav className="flex items-center gap-2">
@@ -135,7 +148,7 @@ const NavBar = () => {
             <li className="ml-2">
               <button
                 onClick={handleLogout}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-brand-orange hover:bg-red-500/20 hover:text-white transition-all duration-300 font-semibold"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-brand-orange hover:bg-red-500/20 hover:text-white transition-all duration-300 font-semibold cursor-pointer"
                 title="Cerrar Sesión"
               >
                 <span className="text-base">🚪</span>
@@ -145,22 +158,26 @@ const NavBar = () => {
           </ul>
         </nav>
       </div>
-      {/* Badge móvil del Taller */}
-      <div className="md:hidden bg-blue-950/60 py-1 px-4 text-center text-xs text-blue-200 border-t border-white/10 font-medium flex items-center justify-center gap-1">
-        <span>🏭</span> Taller: <strong className="text-white">{nombreTaller}</strong>
-      </div>
+      {/* Badge móvil del Taller con enlace al Dashboard */}
+      <Link
+        to="/dashboard"
+        title="Ir al Dashboard"
+        className="md:hidden block bg-blue-950/60 hover:bg-blue-950 py-1.5 px-4 text-center text-xs text-blue-200 hover:text-white border-t border-white/10 font-medium transition-colors cursor-pointer"
+      >
+        <span>🏭</span> Taller: <strong className="text-white underline decoration-dotted">{nombreTaller}</strong>
+      </Link>
     </header>
   );
 };
 
-// Layout con navegación (para páginas post-login)
-const AppLayout = ({ children }) => {
+// Layout con navegación persistente (para páginas post-login)
+const AppLayout = () => {
   return (
     <div className="min-h-screen flex flex-col bg-brand-gray">
       <SyncManager />
       <NavBar />
       <main className="flex-grow container mx-auto px-4 py-6">
-        {children}
+        <Outlet />
       </main>
       <footer className="bg-white border-t border-gray-200 text-center py-4 px-4 text-sm text-gray-500">
         <p>&copy; {new Date().getFullYear()} AutoCheck 360 — Taller Mecánico Inteligente.</p>
@@ -180,12 +197,14 @@ function App() {
         {/* Login sin layout (pantalla completa) */}
         <Route path="/" element={<Login />} />
         
-        {/* Páginas con layout completo */}
-        <Route path="/dashboard" element={<AppLayout><Dashboard /></AppLayout>} />
-        <Route path="/nueva-orden" element={<AppLayout><WorkOrderForm /></AppLayout>} />
-        <Route path="/ordenes-listas" element={<AppLayout><CompletedOrders /></AppLayout>} />
-        <Route path="/turnos" element={<AppLayout><Appointments /></AppLayout>} />
-        <Route path="/perfil" element={<AppLayout><Profile /></AppLayout>} />
+        {/* Páginas con layout persistente: no se desmonta al cambiar de solapa */}
+        <Route element={<AppLayout />}>
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/nueva-orden" element={<WorkOrderForm />} />
+          <Route path="/ordenes-listas" element={<CompletedOrders />} />
+          <Route path="/turnos" element={<Appointments />} />
+          <Route path="/perfil" element={<Profile />} />
+        </Route>
         
         {/* Redirect para rutas desconocidas */}
         <Route path="*" element={<Navigate to="/" replace />} />

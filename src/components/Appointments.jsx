@@ -21,11 +21,11 @@ const DAY_NAMES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 const Appointments = () => {
   const today = new Date().toISOString().split('T')[0];
   const [selectedDate, setSelectedDate] = useState(today);
-  const [appointments, setAppointments] = useState([]);
+  const [appointments, setAppointments] = useState(() => getAppointmentsByDate(today));
   const [showModal, setShowModal] = useState(false);
   const [showCalendarModal, setShowCalendarModal] = useState(false);
   const [form, setForm] = useState({ nombre: '', patente: '', modelo: '', hora: '09:00', telefono: '' });
-  const [syncing, setSyncing] = useState(true);
+  const [syncing, setSyncing] = useState(false);
 
   // Estado para la navegación del calendario mensual
   const [calYear, setCalYear] = useState(() => new Date(today).getFullYear());
@@ -35,18 +35,29 @@ const Appointments = () => {
     setAppointments(getAppointmentsByDate(selectedDate));
   }, [selectedDate]);
 
+  // Cargar inmediatamente turnos locales al cambiar de fecha
   useEffect(() => {
+    loadAppointments();
+  }, [loadAppointments]);
+
+  // Sincronizar en segundo plano sin bloquear la pantalla al montar
+  useEffect(() => {
+    let isMounted = true;
     const init = async () => {
-      setSyncing(true);
       try {
         await syncAppointmentsFromFirestore();
+        if (isMounted) {
+          loadAppointments();
+        }
       } catch (err) {
         console.warn('Sync turnos error:', err);
       }
-      loadAppointments();
-      setSyncing(false);
     };
     init();
+
+    return () => {
+      isMounted = false;
+    };
   }, [loadAppointments]);
 
   const takenHours = appointments.map(a => a.hora);

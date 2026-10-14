@@ -5,28 +5,37 @@ import { getCompletedOrders, deleteOrder, syncOrdersFromFirestore } from '../uti
 import { generateOrderPDF } from '../utils/pdfGenerator';
 
 const CompletedOrders = () => {
-  const [orders, setOrders] = useState([]);
+  const [orders, setOrders] = useState(() => getCompletedOrders());
   const [filtroFecha, setFiltroFecha] = useState('');
   const [expandedId, setExpandedId] = useState(null);
-  const [syncing, setSyncing] = useState(true);
-
-  useEffect(() => {
-    const init = async () => {
-      setSyncing(true);
-      try {
-        await syncOrdersFromFirestore();
-      } catch (err) {
-        console.warn('Sync error:', err);
-      }
-      loadOrders();
-      setSyncing(false);
-    };
-    init();
-  }, []);
+  const [syncing, setSyncing] = useState(false);
 
   const loadOrders = () => {
     setOrders(getCompletedOrders());
   };
+
+  useEffect(() => {
+    // Carga inmediata de órdenes locales para visualización instantánea
+    loadOrders();
+
+    // Sincronización en segundo plano sin bloquear la pantalla
+    let isMounted = true;
+    const init = async () => {
+      try {
+        await syncOrdersFromFirestore();
+        if (isMounted) {
+          loadOrders();
+        }
+      } catch (err) {
+        console.warn('Sync error:', err);
+      }
+    };
+    init();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const handleDeleteOrder = (order, e) => {
     e.stopPropagation();
