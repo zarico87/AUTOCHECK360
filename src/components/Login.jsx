@@ -386,6 +386,9 @@ const Login = () => {
           <p className="text-center text-xs text-gray-500 mt-1">
             Soporte técnico WhatsApp: <a href="https://wa.me/5493512469463" target="_blank" rel="noreferrer" className="text-brand-blue font-bold hover:underline">3512469463</a>
           </p>
+          <p className="text-center text-xs text-gray-400 mt-0.5">
+            Diseño realizado por <span className="font-semibold text-brand-blue">ZadikDesign</span>
+          </p>
         </div>
       </div>
 

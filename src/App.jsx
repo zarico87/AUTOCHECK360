@@ -162,8 +162,11 @@ const AppLayout = ({ children }) => {
       <main className="flex-grow container mx-auto px-4 py-6">
         {children}
       </main>
-      <footer className="bg-white border-t border-gray-200 text-center py-4 text-sm text-gray-500">
+      <footer className="bg-white border-t border-gray-200 text-center py-4 px-4 text-sm text-gray-500">
         <p>&copy; {new Date().getFullYear()} AutoCheck 360 — Taller Mecánico Inteligente.</p>
+        <p className="text-xs text-gray-400 mt-1">
+          Diseño realizado por <span className="font-semibold text-brand-blue">ZadikDesign</span>
+        </p>
       </footer>
       <WhatsAppButton />
     </div>
