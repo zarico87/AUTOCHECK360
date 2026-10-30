@@ -22,6 +22,17 @@ const DAY_NAMES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
 const APPOINTMENTS_KEY = 'autocheck360_appointments';
 
+export const SERVICIOS_TURNOS = [
+  'Limpiaparabrisas',
+  'Lavaparabrisas',
+  'Service lubricentro',
+  'Diagnóstico PC',
+  'DPF off',
+  'Mecánica ligera',
+  'Derivados Forcor',
+  'Instrumental',
+];
+
 /**
  * Calcula la fecha del próximo service sugerido (6 meses desde la fecha del turno).
  */
@@ -48,8 +59,38 @@ const Appointments = () => {
   const [appointments, setAppointments] = useState(() => getAppointmentsByDate(today));
   const [showModal, setShowModal] = useState(false);
   const [showCalendarModal, setShowCalendarModal] = useState(false);
-  const [form, setForm] = useState({ nombre: '', patente: '', modelo: '', hora: '09:00', telefono: '' });
+  const [form, setForm] = useState({
+    nombre: '',
+    patente: '',
+    modelo: '',
+    hora: '09:00',
+    telefono: '',
+    servicios: [],
+  });
   const [syncing, setSyncing] = useState(false);
+
+  const handleToggleServicio = (servicio) => {
+    setForm((prev) => {
+      const current = prev.servicios || [];
+      const exists = current.includes(servicio);
+      return {
+        ...prev,
+        servicios: exists
+          ? current.filter((s) => s !== servicio)
+          : [...current, servicio],
+      };
+    });
+  };
+
+  const handleSelectAllServicios = () => {
+    setForm((prev) => ({
+      ...prev,
+      servicios:
+        prev.servicios?.length === SERVICIOS_TURNOS.length
+          ? []
+          : [...SERVICIOS_TURNOS],
+    }));
+  };
 
   // Estado para la navegación del calendario mensual
   const [calYear, setCalYear] = useState(() => new Date(today).getFullYear());
@@ -161,6 +202,7 @@ const Appointments = () => {
       ...form,
       patente: form.patente.toUpperCase(),
       fecha: selectedDate,
+      servicios: form.servicios || [],
     });
 
     if (result.error) {
@@ -180,8 +222,13 @@ const Appointments = () => {
     const proximoService = calcularProximoService(selectedDate);
     const fechaProximoService = formatDateDMY(proximoService);
 
+    // Texto de servicios para mensaje
+    const serviciosTexto = form.servicios && form.servicios.length > 0
+      ? `\n🛠️ *Servicios solicitados:* ${form.servicios.join(', ')}`
+      : '';
+
     // Construir mensaje de confirmación del turno por WhatsApp
-    const mensajeConfirmacion = `Hola ${form.nombre},\n\nTenés un turno reservado en *${tallerName}*.\n\n📅 Fecha: *${fechaFormateada}*\n⏰ Hora: *${form.hora} hs.*\n🚗 Vehículo: *${form.modelo}* (Patente: *${form.patente.toUpperCase()}*)\n\n¡Te esperamos!`;
+    const mensajeConfirmacion = `Hola ${form.nombre},\n\nTenés un turno reservado en *${tallerName}*.\n\n📅 Fecha: *${fechaFormateada}*\n⏰ Hora: *${form.hora} hs.*\n🚗 Vehículo: *${form.modelo}* (Patente: *${form.patente.toUpperCase()}*)${serviciosTexto}\n\n¡Te esperamos!`;
     const wappUrlConfirmacion = `https://wa.me/${form.telefono.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(mensajeConfirmacion)}`;
 
     // Construir mensaje de recordatorio del próximo service por WhatsApp
@@ -229,7 +276,7 @@ const Appointments = () => {
         if (resRecordatorio.isConfirmed) {
           window.open(wappUrlRecordatorio, '_blank');
         }
-        setForm({ nombre: '', patente: '', modelo: '', hora: availableHours[0] || '09:00', telefono: '' });
+        setForm({ nombre: '', patente: '', modelo: '', hora: availableHours[0] || '09:00', telefono: '', servicios: [] });
         setShowModal(false);
         loadAppointments();
       });
@@ -400,7 +447,7 @@ const Appointments = () => {
             if (turnosRestantes === 0) {
               Swal.fire({ title: 'Día completo', text: 'No hay más turnos disponibles para este día.', icon: 'warning', confirmButtonColor: '#F97316' });
             } else {
-              setForm({ nombre: '', patente: '', modelo: '', hora: availableHours[0] || '09:00', telefono: '' });
+              setForm({ nombre: '', patente: '', modelo: '', hora: availableHours[0] || '09:00', telefono: '', servicios: [] });
               setShowModal(true);
             }
           }}
@@ -435,30 +482,65 @@ const Appointments = () => {
           {appointments.map((apt, idx) => (
             <div
               key={apt.id}
-              className="bg-white rounded-xl shadow-md p-5 border-l-4 border-brand-blue hover:shadow-lg transition-all duration-300 animate-slideUp"
+              className="bg-white rounded-xl shadow-md p-5 border-l-4 border-brand-blue hover:shadow-lg transition-all duration-300 animate-slideUp flex flex-col justify-between"
               style={{ animationDelay: `${idx * 80}ms` }}
             >
-              <div className="flex justify-between items-start">
-                <div className="flex items-center gap-4">
-                  <div className="bg-brand-blue text-white rounded-lg px-3 py-2 text-center min-w-[60px]">
-                    <span className="text-lg font-bold">{apt.hora}</span>
+              <div>
+                <div className="flex justify-between items-start">
+                  <div className="flex items-center gap-4">
+                    <div className="bg-brand-blue text-white rounded-lg px-3 py-2 text-center min-w-[60px]">
+                      <span className="text-lg font-bold">{apt.hora}</span>
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-brand-grayDark text-lg">{apt.nombre}</h3>
+                      <p className="text-sm text-gray-500">{apt.modelo}</p>
+                      <p className="text-sm font-semibold text-brand-blue uppercase mt-1">{apt.patente}</p>
+                    </div>
                   </div>
-                  <div>
-                    <h3 className="font-bold text-brand-grayDark text-lg">{apt.nombre}</h3>
-                    <p className="text-sm text-gray-500">{apt.modelo}</p>
-                    <p className="text-sm font-semibold text-brand-blue uppercase mt-1">{apt.patente}</p>
-                  </div>
+                  <button
+                    onClick={() => handleDelete(apt.id, apt.nombre)}
+                    className="text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg p-2 transition-colors"
+                    title="Eliminar turno"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
                 </div>
-                <button
-                  onClick={() => handleDelete(apt.id, apt.nombre)}
-                  className="text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg p-2 transition-colors"
-                  title="Eliminar turno"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
+
+                {/* Checklist de servicios solicitados */}
+                {apt.servicios && apt.servicios.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-gray-100">
+                    <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1.5 flex items-center gap-1">
+                      <span>🛠️</span> Servicios:
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {apt.servicios.map((srv, sIdx) => (
+                        <span
+                          key={sIdx}
+                          className="inline-flex items-center text-xs px-2.5 py-1 bg-blue-50 text-brand-blue font-semibold rounded-lg border border-blue-200 shadow-sm"
+                        >
+                          ✓ {srv}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {/* Acceso directo a WhatsApp si tiene teléfono */}
+              {apt.telefono && (
+                <div className="mt-3 pt-2 border-t border-gray-50 flex justify-end">
+                  <a
+                    href={`https://wa.me/${apt.telefono.replace(/[^0-9]/g, '')}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 font-semibold bg-green-50 hover:bg-green-100 px-3 py-1 rounded-md transition-colors border border-green-200"
+                  >
+                    <span>📱</span> WhatsApp ({apt.telefono})
+                  </a>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -576,9 +658,9 @@ const Appointments = () => {
 
       {/* MODAL — Nuevo Turno */}
       {showModal && (
-        <div className="fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-4 animate-fadeIn" onClick={() => setShowModal(false)}>
+        <div className="fixed inset-0 z-40 bg-black/50 flex items-center justify-center p-4 animate-fadeIn overflow-y-auto" onClick={() => setShowModal(false)}>
           <div
-            className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 border-t-4 border-brand-blue animate-slideUp"
+            className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 border-t-4 border-brand-blue animate-slideUp my-auto max-h-[92vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-center mb-6">
@@ -658,6 +740,61 @@ const Appointments = () => {
                     <option key={h} value={h}>{h} hs</option>
                   ))}
                 </select>
+              </div>
+
+              {/* Checklist de Servicios / Motivo del Turno */}
+              <div>
+                <div className="flex justify-between items-center mb-1.5">
+                  <label className="block text-sm font-bold text-brand-grayDark">
+                    Servicios solicitados <span className="text-xs font-normal text-gray-500">(Checklist)</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleSelectAllServicios}
+                    className="text-xs text-brand-blue hover:text-blue-800 font-semibold transition-colors"
+                  >
+                    {form.servicios?.length === SERVICIOS_TURNOS.length ? 'Deseleccionar todos' : 'Marcar todos'}
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 mb-2">Elegí una o varias opciones para este turno:</p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 bg-gray-50 p-3 rounded-xl border border-gray-200 max-h-48 overflow-y-auto">
+                  {SERVICIOS_TURNOS.map((srv) => {
+                    const isChecked = form.servicios?.includes(srv);
+                    return (
+                      <label
+                        key={srv}
+                        className={`flex items-center gap-2.5 p-2 rounded-lg cursor-pointer text-xs font-semibold transition-all select-none border ${
+                          isChecked
+                            ? 'bg-blue-50 border-brand-blue text-brand-blue shadow-sm ring-1 ring-brand-blue/30'
+                            : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-100 hover:border-gray-300'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => handleToggleServicio(srv)}
+                          className="w-4 h-4 text-brand-blue rounded border-gray-300 focus:ring-brand-blue cursor-pointer"
+                        />
+                        <span className="truncate">{srv}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {form.servicios && form.servicios.length > 0 && (
+                  <div className="flex justify-between items-center text-xs mt-1.5">
+                    <span className="text-brand-blue font-semibold">
+                      ✓ {form.servicios.length} de {SERVICIOS_TURNOS.length} seleccionados
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setForm((prev) => ({ ...prev, servicios: [] }))}
+                      className="text-gray-400 hover:text-red-500 underline text-[11px]"
+                    >
+                      Limpiar selección
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="flex gap-3 pt-2">
