@@ -2,6 +2,8 @@
 import React, { useState, useEffect } from 'react';
 import Swal from 'sweetalert2';
 import { getSession, getAppointmentsByDate, addAppointment, deleteAppointment, countAppointmentsByDate, syncAppointmentsFromFirestore } from '../utils/storage';
+import { db } from '../firebase/config';
+import { collection, onSnapshot } from 'firebase/firestore';
 
 const MAX_TURNOS = 8;
 
@@ -18,6 +20,28 @@ const MONTH_NAMES = [
 
 const DAY_NAMES = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
+const APPOINTMENTS_KEY = 'autocheck360_appointments';
+
+/**
+ * Calcula la fecha del próximo service sugerido (6 meses desde la fecha del turno).
+ */
+const calcularProximoService = (fechaTurno) => {
+  const [year, month, day] = fechaTurno.split('-').map(Number);
+  const fecha = new Date(year, month - 1, day);
+  fecha.setMonth(fecha.getMonth() + 6);
+  return fecha;
+};
+
+/**
+ * Formatea una fecha Date a dd/mm/yyyy
+ */
+const formatDateDMY = (date) => {
+  const d = String(date.getDate()).padStart(2, '0');
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const y = date.getFullYear();
+  return `${d}/${m}/${y}`;
+};
+
 const Appointments = () => {
   const today = new Date().toISOString().split('T')[0];
   const [selectedDate, setSelectedDate] = useState(today);
@@ -31,6 +55,12 @@ const Appointments = () => {
   const [calYear, setCalYear] = useState(() => new Date(today).getFullYear());
   const [calMonth, setCalMonth] = useState(() => new Date(today).getMonth());
 
+  // Referencia al selectedDate actual para uso dentro del listener de onSnapshot
+  const selectedDateRef = React.useRef(selectedDate);
+  React.useEffect(() => {
+    selectedDateRef.current = selectedDate;
+  }, [selectedDate]);
+
   const loadAppointments = React.useCallback(() => {
     setAppointments(getAppointmentsByDate(selectedDate));
   }, [selectedDate]);
@@ -40,25 +70,76 @@ const Appointments = () => {
     loadAppointments();
   }, [loadAppointments]);
 
-  // Sincronizar en segundo plano sin bloquear la pantalla al montar
+  // ── Sincronización en tiempo real con Firestore (onSnapshot) ──
+  // Mismo patrón que Dashboard para que los turnos se vean al instante
+  // en cualquier dispositivo conectado.
   useEffect(() => {
-    let isMounted = true;
+    let unsubscribe = () => {};
+
     const init = async () => {
       try {
+        // Sincronización inicial one-shot en background
         await syncAppointmentsFromFirestore();
-        if (isMounted) {
+        loadAppointments();
+
+        const session = getSession();
+        const usuario = session?.usuario?.toLowerCase();
+
+        if (db && usuario) {
+          const appointmentsRef = collection(db, "workshops", usuario, "appointments");
+
+          // Escuchar cambios en tiempo real (multi-dispositivo)
+          unsubscribe = onSnapshot(appointmentsRef, (snapshot) => {
+            const firestoreAppointments = [];
+            snapshot.forEach((doc) => {
+              firestoreAppointments.push(doc.data());
+            });
+
+            // Fusionar con datos locales (Firestore tiene prioridad)
+            const localData = localStorage.getItem(APPOINTMENTS_KEY);
+            const localAppointments = localData ? JSON.parse(localData) : [];
+
+            const appointmentMap = new Map();
+            localAppointments.forEach(a => { if (a.id) appointmentMap.set(a.id, a); });
+            firestoreAppointments.forEach(a => { if (a.id) appointmentMap.set(a.id, { ...appointmentMap.get(a.id), ...a }); });
+
+            const merged = Array.from(appointmentMap.values());
+            localStorage.setItem(APPOINTMENTS_KEY, JSON.stringify(merged));
+
+            // Actualizar la vista con la fecha actualmente seleccionada
+            const currentDate = selectedDateRef.current;
+            const filtered = merged
+              .filter(a => a.fecha === currentDate)
+              .sort((a, b) => a.hora.localeCompare(b.hora));
+            setAppointments(filtered);
+            setSyncing(false);
+          }, (error) => {
+            console.error("Error al sincronizar turnos en tiempo real:", error);
+            loadAppointments();
+            setSyncing(false);
+          });
+        } else {
           loadAppointments();
+          setSyncing(false);
         }
       } catch (err) {
         console.warn('Sync turnos error:', err);
+        loadAppointments();
+        setSyncing(false);
       }
     };
+
     init();
 
-    return () => {
-      isMounted = false;
-    };
-  }, [loadAppointments]);
+    return () => unsubscribe();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Cuando cambia la fecha seleccionada, re-filtrar los datos locales
+  // (el onSnapshot ya mantiene localStorage actualizado)
+  useEffect(() => {
+    loadAppointments();
+  }, [selectedDate, loadAppointments]);
 
   const takenHours = appointments.map(a => a.hora);
   const availableHours = HORARIOS.filter(h => !takenHours.includes(h));
@@ -89,15 +170,25 @@ const Appointments = () => {
 
     const session = getSession();
     const tallerName = session?.nombreTaller || 'nuestro taller';
+    const tallerTelefono = session?.telefono || '';
 
     // Formatear la fecha
     const [year, month, day] = selectedDate.split('-');
     const fechaFormateada = `${day}/${month}/${year}`;
 
-    // Construir mensaje de WhatsApp
-    const mensaje = `Hola ${form.nombre},\n\nTenés un turno reservado en *${tallerName}*.\n\n📅 Fecha: *${fechaFormateada}*\n⏰ Hora: *${form.hora} hs.*\n🚗 Vehículo: *${form.modelo}* (Patente: *${form.patente.toUpperCase()}*)\n\n¡Te esperamos!`;
-    const wappUrl = `https://wa.me/${form.telefono.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(mensaje)}`;
+    // ── Calcular fecha del próximo service (6 meses después) ──
+    const proximoService = calcularProximoService(selectedDate);
+    const fechaProximoService = formatDateDMY(proximoService);
 
+    // Construir mensaje de confirmación del turno por WhatsApp
+    const mensajeConfirmacion = `Hola ${form.nombre},\n\nTenés un turno reservado en *${tallerName}*.\n\n📅 Fecha: *${fechaFormateada}*\n⏰ Hora: *${form.hora} hs.*\n🚗 Vehículo: *${form.modelo}* (Patente: *${form.patente.toUpperCase()}*)\n\n¡Te esperamos!`;
+    const wappUrlConfirmacion = `https://wa.me/${form.telefono.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(mensajeConfirmacion)}`;
+
+    // Construir mensaje de recordatorio del próximo service por WhatsApp
+    const mensajeRecordatorio = `Hola ${form.nombre},\n\nDesde *${tallerName}* te recordamos que tu próximo service para el *${form.modelo}* (Patente: *${form.patente.toUpperCase()}*) está programado aproximadamente para:\n\n🔧 *${fechaProximoService}* (en 6 meses / 10.000 km)\n\n📌 Te recomendamos agendar tu turno con anticipación para mantener tu vehículo en óptimas condiciones.\n\n${tallerTelefono ? `📞 Contacto: ${tallerTelefono}\n\n` : ''}¡Gracias por confiar en nosotros!`;
+    const wappUrlRecordatorio = `https://wa.me/${form.telefono.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(mensajeRecordatorio)}`;
+
+    // ── Primer diálogo: Confirmación del turno ──
     Swal.fire({
       title: '¡Turno guardado!',
       text: '¿Querés enviar la confirmación por WhatsApp al cliente?',
@@ -105,15 +196,43 @@ const Appointments = () => {
       showCancelButton: true,
       confirmButtonColor: '#25D366', // WhatsApp green
       cancelButtonColor: '#6B7280',
-      confirmButtonText: 'Sí, enviar WhatsApp',
+      confirmButtonText: '📱 Sí, enviar WhatsApp',
       cancelButtonText: 'Solo guardar',
     }).then((res) => {
       if (res.isConfirmed) {
-        window.open(wappUrl, '_blank');
+        window.open(wappUrlConfirmacion, '_blank');
       }
-      setForm({ nombre: '', patente: '', modelo: '', hora: availableHours[0] || '09:00', telefono: '' });
-      setShowModal(false);
-      loadAppointments();
+
+      // ── Segundo diálogo: Recordatorio de próximo service ──
+      Swal.fire({
+        title: '🔧 Recordatorio de Próximo Service',
+        html: `
+          <div style="text-align: left; font-size: 14px; line-height: 1.6;">
+            <p>El próximo service sugerido para <strong>${form.modelo}</strong> (<strong>${form.patente.toUpperCase()}</strong>) sería aproximadamente:</p>
+            <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 12px; padding: 12px 16px; margin: 12px 0; text-align: center;">
+              <span style="font-size: 22px; font-weight: bold; color: #16a34a;">📅 ${fechaProximoService}</span>
+              <p style="font-size: 12px; color: #6b7280; margin-top: 4px;">6 meses / 10.000 km (lo que ocurra primero)</p>
+            </div>
+            <p>¿Querés enviarle al cliente un <strong>recordatorio por WhatsApp</strong> sobre su próximo service?</p>
+          </div>
+        `,
+        icon: 'info',
+        showCancelButton: true,
+        confirmButtonColor: '#25D366',
+        cancelButtonColor: '#6B7280',
+        confirmButtonText: '📱 Enviar recordatorio',
+        cancelButtonText: 'No enviar',
+        customClass: {
+          popup: 'swal2-popup-wide',
+        },
+      }).then((resRecordatorio) => {
+        if (resRecordatorio.isConfirmed) {
+          window.open(wappUrlRecordatorio, '_blank');
+        }
+        setForm({ nombre: '', patente: '', modelo: '', hora: availableHours[0] || '09:00', telefono: '' });
+        setShowModal(false);
+        loadAppointments();
+      });
     });
   };
 
