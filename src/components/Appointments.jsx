@@ -34,9 +34,61 @@ export const SERVICIOS_TURNOS = [
 ];
 
 /**
+ * Normaliza y formatea un número telefónico para links wa.me de WhatsApp.
+ * Soporta números de Argentina (con o sin 0, 15, o código de país 54/549) e internacionales.
+ */
+export const formatWhatsAppNumber = (phone) => {
+  if (!phone) return '';
+  const str = String(phone).trim();
+  if (!str) return '';
+
+  const hasPlus = str.startsWith('+');
+  let cleaned = str.replace(/\D/g, '');
+  if (!cleaned) return '';
+
+  if (hasPlus) {
+    if (cleaned.startsWith('54') && !cleaned.startsWith('549')) {
+      return `549${cleaned.slice(2)}`;
+    }
+    return cleaned;
+  }
+
+  if (cleaned.startsWith('549')) {
+    return cleaned;
+  }
+
+  if (cleaned.startsWith('54')) {
+    return `549${cleaned.slice(2)}`;
+  }
+
+  if (cleaned.startsWith('0')) {
+    cleaned = cleaned.slice(1);
+  }
+
+  // Quitar el '15' de celular local en Argentina (ej: 351 15 2469463 => 3512469463)
+  if (cleaned.length === 12) {
+    const without15 = cleaned.replace(/^(\d{2,4})15(\d{6,8})$/, '$1$2');
+    if (without15.length === 10) {
+      cleaned = without15;
+    }
+  }
+
+  if (cleaned.length === 10) {
+    return `549${cleaned}`;
+  }
+
+  if (cleaned.length <= 11) {
+    return `549${cleaned}`;
+  }
+
+  return cleaned;
+};
+
+/**
  * Calcula la fecha del próximo service sugerido (6 meses desde la fecha del turno).
  */
 const calcularProximoService = (fechaTurno) => {
+  if (!fechaTurno) return new Date();
   const [year, month, day] = fechaTurno.split('-').map(Number);
   const fecha = new Date(year, month - 1, day);
   fecha.setMonth(fecha.getMonth() + 6);
@@ -47,6 +99,7 @@ const calcularProximoService = (fechaTurno) => {
  * Formatea una fecha Date a dd/mm/yyyy
  */
 const formatDateDMY = (date) => {
+  if (!date) return '';
   const d = String(date.getDate()).padStart(2, '0');
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const y = date.getFullYear();
@@ -198,47 +251,128 @@ const Appointments = () => {
       return;
     }
 
-    const result = addAppointment({
+    // ── Verificar si se seleccionó la opción de Lubricentro ──
+    const serviciosSeleccionados = form.servicios || [];
+    const esLubricentro = serviciosSeleccionados.some((s) =>
+      s.toLowerCase().includes('lubricentro')
+    );
+
+    // ── Calcular fecha del próximo service ÚNICAMENTE si es lubricentro ──
+    let fechaProximoService = null;
+    if (esLubricentro) {
+      const proximoServiceDate = calcularProximoService(selectedDate);
+      fechaProximoService = formatDateDMY(proximoServiceDate);
+    }
+
+    // Guardar turno en storage y sincronizar
+    const appointmentData = {
       ...form,
-      patente: form.patente.toUpperCase(),
+      patente: form.patente.toUpperCase().trim(),
+      nombre: form.nombre.trim(),
+      modelo: form.modelo.trim(),
+      telefono: form.telefono ? form.telefono.trim() : '',
       fecha: selectedDate,
-      servicios: form.servicios || [],
-    });
+      servicios: serviciosSeleccionados,
+      // El cálculo del service solo se agrega cuando se selecciona la opción de lubricentro
+      proximoService: fechaProximoService,
+      esLubricentro: esLubricentro,
+    };
+
+    const result = addAppointment(appointmentData);
 
     if (result.error) {
       Swal.fire({ title: 'Error', text: result.error, icon: 'error', confirmButtonColor: '#F97316' });
       return;
     }
 
+    const resetAndClose = () => {
+      setForm({
+        nombre: '',
+        patente: '',
+        modelo: '',
+        hora: availableHours[0] || '09:00',
+        telefono: '',
+        servicios: [],
+      });
+      setShowModal(false);
+      loadAppointments();
+    };
+
+    // ── Verificar si se colocó teléfono para el envío de WhatsApp ──
+    const rawDigits = (form.telefono || '').replace(/\D/g, '');
+    const tieneTelefono = rawDigits.length >= 6;
+
+    // Formatear la fecha para presentación
+    const [year, month, day] = selectedDate.split('-');
+    const fechaFormateada = `${day}/${month}/${year}`;
+
+    // Si NO se colocó teléfono: guardar turno sin abrir ni preguntar por WhatsApp
+    if (!tieneTelefono) {
+      Swal.fire({
+        title: '¡Turno guardado!',
+        html: `
+          <div style="text-align: left; font-size: 14px; line-height: 1.6;">
+            <p>Se agendó el turno para <strong>${form.nombre}</strong> (${form.patente.toUpperCase()}) el día <strong>${fechaFormateada}</strong> a las <strong>${form.hora} hs</strong>.</p>
+            ${esLubricentro && fechaProximoService ? `
+              <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 10px; padding: 10px 14px; margin-top: 12px; text-align: center;">
+                <span style="font-size: 13px; font-weight: bold; color: #16a34a;">🔧 Próximo Service Lubricentro: ${fechaProximoService}</span>
+                <p style="font-size: 11px; color: #6b7280; margin: 2px 0 0 0;">Cálculo estimado a 6 meses / 10.000 km</p>
+              </div>
+            ` : ''}
+          </div>
+        `,
+        icon: 'success',
+        confirmButtonColor: '#1E40AF',
+        confirmButtonText: 'Aceptar',
+      }).then(() => {
+        resetAndClose();
+      });
+      return;
+    }
+
+    // ── Si SE COLOCÓ TELÉFONO: Preparar enlace y mensaje de WhatsApp ──
+    const formattedPhone = formatWhatsAppNumber(form.telefono);
     const session = getSession();
     const tallerName = session?.nombreTaller || 'nuestro taller';
     const tallerTelefono = session?.telefono || '';
 
-    // Formatear la fecha
-    const [year, month, day] = selectedDate.split('-');
-    const fechaFormateada = `${day}/${month}/${year}`;
-
-    // ── Calcular fecha del próximo service (6 meses después) ──
-    const proximoService = calcularProximoService(selectedDate);
-    const fechaProximoService = formatDateDMY(proximoService);
-
     // Texto de servicios para mensaje
-    const serviciosTexto = form.servicios && form.servicios.length > 0
-      ? `\n🛠️ *Servicios solicitados:* ${form.servicios.join(', ')}`
+    const serviciosTexto = serviciosSeleccionados.length > 0
+      ? `\n🛠️ *Servicios solicitados:* ${serviciosSeleccionados.join(', ')}`
+      : '';
+
+    // Cálculo del service: SOLO se agrega al mensaje de WhatsApp si es Lubricentro
+    const serviceTextoEnMensaje = esLubricentro && fechaProximoService
+      ? `\n\n🔧 *Próximo service sugerido:* ${fechaProximoService} (en 6 meses / 10.000 km)`
       : '';
 
     // Construir mensaje de confirmación del turno por WhatsApp
-    const mensajeConfirmacion = `Hola ${form.nombre},\n\nTenés un turno reservado en *${tallerName}*.\n\n📅 Fecha: *${fechaFormateada}*\n⏰ Hora: *${form.hora} hs.*\n🚗 Vehículo: *${form.modelo}* (Patente: *${form.patente.toUpperCase()}*)${serviciosTexto}\n\n¡Te esperamos!`;
-    const wappUrlConfirmacion = `https://wa.me/${form.telefono.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(mensajeConfirmacion)}`;
+    const mensajeConfirmacion = `Hola ${form.nombre},\n\nTenés un turno reservado en *${tallerName}*.\n\n📅 Fecha: *${fechaFormateada}*\n⏰ Hora: *${form.hora} hs.*\n🚗 Vehículo: *${form.modelo}* (Patente: *${form.patente.toUpperCase()}*)${serviciosTexto}${serviceTextoEnMensaje}\n\n¡Te esperamos!`;
+    const wappUrlConfirmacion = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(mensajeConfirmacion)}`;
 
-    // Construir mensaje de recordatorio del próximo service por WhatsApp
-    const mensajeRecordatorio = `Hola ${form.nombre},\n\nDesde *${tallerName}* te recordamos que tu próximo service para el *${form.modelo}* (Patente: *${form.patente.toUpperCase()}*) está programado aproximadamente para:\n\n🔧 *${fechaProximoService}* (en 6 meses / 10.000 km)\n\n📌 Te recomendamos agendar tu turno con anticipación para mantener tu vehículo en óptimas condiciones.\n\n${tallerTelefono ? `📞 Contacto: ${tallerTelefono}\n\n` : ''}¡Gracias por confiar en nosotros!`;
-    const wappUrlRecordatorio = `https://wa.me/${form.telefono.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(mensajeRecordatorio)}`;
+    // Construir mensaje de recordatorio del próximo service (solo relevante para lubricentro)
+    const mensajeRecordatorio = esLubricentro && fechaProximoService
+      ? `Hola ${form.nombre},\n\nDesde *${tallerName}* te recordamos que tu próximo service para el *${form.modelo}* (Patente: *${form.patente.toUpperCase()}*) está programado aproximadamente para:\n\n🔧 *${fechaProximoService}* (en 6 meses / 10.000 km)\n\n📌 Te recomendamos agendar tu turno con anticipación para mantener tu vehículo en óptimas condiciones.\n\n${tallerTelefono ? `📞 Contacto: ${tallerTelefono}\n\n` : ''}¡Gracias por confiar en nosotros!`
+      : '';
+    const wappUrlRecordatorio = esLubricentro && fechaProximoService
+      ? `https://wa.me/${formattedPhone}?text=${encodeURIComponent(mensajeRecordatorio)}`
+      : '';
 
-    // ── Primer diálogo: Confirmación del turno ──
+    // ── Primer diálogo: Confirmación del turno por WhatsApp ──
     Swal.fire({
       title: '¡Turno guardado!',
-      text: '¿Querés enviar la confirmación por WhatsApp al cliente?',
+      html: `
+        <div style="text-align: left; font-size: 14px; line-height: 1.6;">
+          <p>Se guardó el turno para <strong>${form.nombre}</strong> (${form.patente.toUpperCase()}).</p>
+          ${esLubricentro && fechaProximoService ? `
+            <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 10px; padding: 10px 14px; margin: 10px 0; text-align: center;">
+              <span style="font-size: 13px; font-weight: bold; color: #16a34a;">🔧 Próximo Service Lubricentro: ${fechaProximoService}</span>
+              <p style="font-size: 11px; color: #6b7280; margin: 2px 0 0 0;">Cálculo incluido (6 meses / 10.000 km)</p>
+            </div>
+          ` : ''}
+          <p style="margin-top: 8px;">¿Querés enviar la confirmación del turno por <strong>WhatsApp</strong> al cliente (+${formattedPhone})?</p>
+        </div>
+      `,
       icon: 'success',
       showCancelButton: true,
       confirmButtonColor: '#25D366', // WhatsApp green
@@ -247,39 +381,89 @@ const Appointments = () => {
       cancelButtonText: 'Solo guardar',
     }).then((res) => {
       if (res.isConfirmed) {
-        window.open(wappUrlConfirmacion, '_blank');
+        window.open(wappUrlConfirmacion, '_blank', 'noopener,noreferrer');
       }
 
-      // ── Segundo diálogo: Recordatorio de próximo service ──
-      Swal.fire({
-        title: '🔧 Recordatorio de Próximo Service',
-        html: `
-          <div style="text-align: left; font-size: 14px; line-height: 1.6;">
-            <p>El próximo service sugerido para <strong>${form.modelo}</strong> (<strong>${form.patente.toUpperCase()}</strong>) sería aproximadamente:</p>
-            <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 12px; padding: 12px 16px; margin: 12px 0; text-align: center;">
-              <span style="font-size: 22px; font-weight: bold; color: #16a34a;">📅 ${fechaProximoService}</span>
-              <p style="font-size: 12px; color: #6b7280; margin-top: 4px;">6 meses / 10.000 km (lo que ocurra primero)</p>
+      // ── Segundo diálogo: SOLO si se seleccionó lubricentro se ofrece el recordatorio de próximo service ──
+      if (esLubricentro && fechaProximoService) {
+        Swal.fire({
+          title: '🔧 Recordatorio de Próximo Service',
+          html: `
+            <div style="text-align: left; font-size: 14px; line-height: 1.6;">
+              <p>El próximo service sugerido para <strong>${form.modelo}</strong> (<strong>${form.patente.toUpperCase()}</strong>) es:</p>
+              <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 12px; padding: 12px 16px; margin: 12px 0; text-align: center;">
+                <span style="font-size: 22px; font-weight: bold; color: #16a34a;">📅 ${fechaProximoService}</span>
+                <p style="font-size: 12px; color: #6b7280; margin-top: 4px;">6 meses / 10.000 km (lo que ocurra primero)</p>
+              </div>
+              <p>¿Querés enviarle además un mensaje específico de <strong>recordatorio de service por WhatsApp</strong>?</p>
             </div>
-            <p>¿Querés enviarle al cliente un <strong>recordatorio por WhatsApp</strong> sobre su próximo service?</p>
-          </div>
-        `,
-        icon: 'info',
-        showCancelButton: true,
-        confirmButtonColor: '#25D366',
-        cancelButtonColor: '#6B7280',
-        confirmButtonText: '📱 Enviar recordatorio',
-        cancelButtonText: 'No enviar',
-        customClass: {
-          popup: 'swal2-popup-wide',
-        },
-      }).then((resRecordatorio) => {
-        if (resRecordatorio.isConfirmed) {
-          window.open(wappUrlRecordatorio, '_blank');
-        }
-        setForm({ nombre: '', patente: '', modelo: '', hora: availableHours[0] || '09:00', telefono: '', servicios: [] });
-        setShowModal(false);
-        loadAppointments();
+          `,
+          icon: 'info',
+          showCancelButton: true,
+          confirmButtonColor: '#25D366',
+          cancelButtonColor: '#6B7280',
+          confirmButtonText: '📱 Enviar recordatorio',
+          cancelButtonText: 'No enviar',
+          customClass: {
+            popup: 'swal2-popup-wide',
+          },
+        }).then((resRecordatorio) => {
+          if (resRecordatorio.isConfirmed) {
+            window.open(wappUrlRecordatorio, '_blank', 'noopener,noreferrer');
+          }
+          resetAndClose();
+        });
+      } else {
+        // NO es lubricentro: no hay segundo diálogo ni cálculo de service
+        resetAndClose();
+      }
+    });
+  };
+
+  // Enviar recordatorio de próximo service desde la tarjeta del turno
+  const handleSendRecordatorioService = (apt) => {
+    if (!apt.telefono) {
+      Swal.fire({
+        title: 'Sin teléfono',
+        text: 'Este turno no tiene un teléfono registrado.',
+        icon: 'warning',
+        confirmButtonColor: '#F97316',
       });
+      return;
+    }
+
+    const session = getSession();
+    const tallerName = session?.nombreTaller || 'nuestro taller';
+    const tallerTelefono = session?.telefono || '';
+    const formattedPhone = formatWhatsAppNumber(apt.telefono);
+    const fechaService = apt.proximoService || (apt.fecha ? formatDateDMY(calcularProximoService(apt.fecha)) : '');
+
+    const mensajeRecordatorio = `Hola ${apt.nombre},\n\nDesde *${tallerName}* te recordamos que el próximo service para tu vehículo *${apt.modelo}* (Patente: *${apt.patente.toUpperCase()}*) está programado aproximadamente para:\n\n🔧 *${fechaService}* (en 6 meses / 10.000 km)\n\n📌 Te recomendamos agendar tu turno con anticipación para mantener tu auto en óptimas condiciones.\n\n${tallerTelefono ? `📞 Contacto: ${tallerTelefono}\n\n` : ''}¡Gracias por confiar en nosotros!`;
+
+    const url = `https://wa.me/${formattedPhone}?text=${encodeURIComponent(mensajeRecordatorio)}`;
+
+    Swal.fire({
+      title: '🔧 Recordatorio de Próximo Service',
+      html: `
+        <div style="text-align: left; font-size: 14px; line-height: 1.6;">
+          <p>Enviar recordatorio de service a <strong>${apt.nombre}</strong> (${apt.patente.toUpperCase()}):</p>
+          <div style="background: #f0fdf4; border: 1px solid #86efac; border-radius: 12px; padding: 12px 16px; margin: 12px 0; text-align: center;">
+            <span style="font-size: 20px; font-weight: bold; color: #16a34a;">📅 ${fechaService}</span>
+            <p style="font-size: 12px; color: #6b7280; margin-top: 4px;">6 meses / 10.000 km</p>
+          </div>
+          <p>¿Abrir WhatsApp con el recordatorio para el número <strong>+${formattedPhone}</strong>?</p>
+        </div>
+      `,
+      icon: 'info',
+      showCancelButton: true,
+      confirmButtonColor: '#25D366',
+      cancelButtonColor: '#6B7280',
+      confirmButtonText: '📱 Abrir WhatsApp',
+      cancelButtonText: 'Cancelar',
+    }).then((res) => {
+      if (res.isConfirmed) {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
     });
   };
 
@@ -526,19 +710,38 @@ const Appointments = () => {
                     </div>
                   </div>
                 )}
+                {/* Cálculo de próximo service (SOLO si fue lubricentro y tiene fecha calculada) */}
+                {apt.proximoService && (
+                  <div className="mt-2.5 pt-2 border-t border-gray-100 flex items-center justify-between">
+                    <span className="inline-flex items-center gap-1.5 text-xs text-green-700 font-semibold bg-green-50 px-2.5 py-1 rounded-md border border-green-200">
+                      <span>🔧</span> Próx. Service: {apt.proximoService}
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* Acceso directo a WhatsApp si tiene teléfono */}
               {apt.telefono && (
-                <div className="mt-3 pt-2 border-t border-gray-50 flex justify-end">
+                <div className="mt-3 pt-2 border-t border-gray-50 flex flex-wrap gap-2 justify-end items-center">
                   <a
-                    href={`https://wa.me/${apt.telefono.replace(/[^0-9]/g, '')}`}
+                    href={`https://wa.me/${formatWhatsAppNumber(apt.telefono)}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 font-semibold bg-green-50 hover:bg-green-100 px-3 py-1 rounded-md transition-colors border border-green-200"
+                    className="inline-flex items-center gap-1.5 text-xs text-green-700 hover:text-green-800 font-semibold bg-green-50 hover:bg-green-100 px-3 py-1.5 rounded-md transition-colors border border-green-200 shadow-sm"
+                    title="Abrir chat en WhatsApp"
                   >
                     <span>📱</span> WhatsApp ({apt.telefono})
                   </a>
+                  {apt.proximoService && (
+                    <button
+                      type="button"
+                      onClick={() => handleSendRecordatorioService(apt)}
+                      className="inline-flex items-center gap-1.5 text-xs text-brand-blue hover:text-blue-800 font-semibold bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-md transition-colors border border-blue-200 shadow-sm"
+                      title="Enviar recordatorio de próximo service por WhatsApp"
+                    >
+                      <span>🔧</span> Avisar Próx. Service
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -705,15 +908,21 @@ const Appointments = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-bold text-brand-grayDark mb-1">Teléfono (WhatsApp)</label>
+                <label className="block text-sm font-bold text-brand-grayDark mb-1">
+                  Teléfono (WhatsApp) <span className="text-xs font-normal text-gray-500">(opcional para avisos)</span>
+                </label>
                 <input
                   type="tel"
                   value={form.telefono}
                   onChange={(e) => setForm({ ...form, telefono: e.target.value })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-brand-blue outline-none"
                   placeholder="Ej: 3511234567 (código de área + número)"
-                  required
                 />
+                {form.telefono && form.telefono.trim().replace(/\D/g, '').length >= 6 && (
+                  <p className="text-[11px] text-green-600 mt-1 flex items-center gap-1 font-medium">
+                    <span>📱</span> Número WhatsApp: +{formatWhatsAppNumber(form.telefono)}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -781,6 +990,25 @@ const Appointments = () => {
                     );
                   })}
                 </div>
+
+                {/* Aviso visual en vivo cuando se selecciona Lubricentro */}
+                {form.servicios?.some((s) => s.toLowerCase().includes('lubricentro')) && (
+                  <div className="mt-2.5 bg-green-50 border border-green-200 rounded-lg p-2.5 flex items-center justify-between text-xs text-green-800 animate-fadeIn">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">🛢️</span>
+                      <div>
+                        <span className="font-bold">Service Lubricentro seleccionado:</span>
+                        <span className="text-gray-600 block text-[11px]">
+                          Se calculará el próximo service para el <strong>{formatDateDMY(calcularProximoService(selectedDate))}</strong> (en 6 meses)
+                        </span>
+                      </div>
+                    </div>
+                    <span className="text-[10px] bg-green-600 text-white font-bold px-2 py-0.5 rounded-full uppercase">
+                      Activo
+                    </span>
+                  </div>
+                )}
+
                 {form.servicios && form.servicios.length > 0 && (
                   <div className="flex justify-between items-center text-xs mt-1.5">
                     <span className="text-brand-blue font-semibold">
